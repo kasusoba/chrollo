@@ -1,20 +1,13 @@
-import {
-	Client,
-	Collection,
-	Events,
-	GatewayIntentBits,
-	MessageFlags,
-	SlashCommandSubcommandGroupBuilder,
-} from "discord.js";
+import { Client, Collection, GatewayIntentBits } from "discord.js";
 import "dotenv/config";
 import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
-// ==========
+const EXT = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// ==========
 
 const client = new Client({
 	intents: [
@@ -24,10 +17,7 @@ const client = new Client({
 	],
 });
 
-client.once(Events.ClientReady, (readyClient) => {
-	console.log(`Ready euy ${readyClient.user.tag}`);
-});
-
+client.cooldowns = new Collection();
 client.commands = new Collection();
 
 const foldersPath = path.join(__dirname, "commands");
@@ -37,14 +27,12 @@ for (const folder of commandFolders) {
 	const commandsPath = path.join(foldersPath, folder);
 	const commandFiles = fs
 		.readdirSync(commandsPath)
-		.filter((file) => file.endsWith(".js"));
+		.filter((file) => file.endsWith(EXT));
 
 	for (const file of commandFiles) {
 		const filePath = path.join(commandsPath, file);
 
 		const commandModule = await import(filePath);
-
-		// Support both ES exports AND CommonJS exports
 		const command = commandModule.default ?? commandModule;
 
 		if ("data" in command && "execute" in command) {
@@ -55,33 +43,22 @@ for (const folder of commandFolders) {
 	}
 }
 
-client.on(Events.InteractionCreate, async (interaction) => {
-	if (!interaction.isChatInputCommand()) return;
+const eventsPath = path.join(__dirname, "events");
+const eventFiles = fs
+	.readdirSync(eventsPath)
+	.filter((file) => file.endsWith(EXT));
 
-	const command = interaction.client.commands.get(interaction.commandName);
+for (const file of eventFiles) {
+	const filePath = path.join(eventsPath, file);
 
-	if (!command) {
-		console.error(`no matching command ${interaction.commandName}`);
-		return;
+	const commandModule = await import(filePath);
+	const event = commandModule.default ?? commandModule;
+
+	if (event.once) {
+		client.once(event.name, (...args) => event.execute(...args));
+	} else {
+		client.on(event.name, (...args) => event.execute(...args));
 	}
-
-	try {
-		await command.execute(interaction);
-	} catch (error) {
-		console.error(error);
-
-		if (interaction.replied || interaction.deferred) {
-			await interaction.followUp({
-				content: "there was error execute command",
-				flags: MessageFlags.Ephemeral,
-			});
-		} else {
-			await interaction.reply({
-				content: "error execute command",
-				flags: MessageFlags.Ephemeral,
-			});
-		}
-	}
-});
+}
 
 client.login(process.env.DISCORD_TOKEN);

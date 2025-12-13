@@ -4,6 +4,7 @@ import {
 } from "discord.js";
 
 const ping = {
+	cooldown: 5,
 	data: new SlashCommandBuilder()
 		.setName("ping")
 		.setDescription("Replies with Pong!"),
