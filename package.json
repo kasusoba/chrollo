@@ -5,10 +5,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc",
-    "deploy-command": "node dist/deploy-command.js"
+    "deploy-command": "pnpm build && node dist/deploy-command.js"
   },
   "keywords": [],
   "author": "",
