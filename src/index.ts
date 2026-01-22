@@ -22,6 +22,15 @@ export const oauth2Client = new google.auth.OAuth2(
 
 const scopes = ["https://www.googleapis.com/auth/photoslibrary.appendonly"];
 
+oauth2Client.on("tokens", (tokens) => {
+	console.log("[GOOGLE] Token refreshed automatically!");
+
+	const currentData = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
+	const newData = { ...currentData, ...tokens };
+
+	fs.writeFileSync(TOKEN_PATH, JSON.stringify(newData, null, 2));
+});
+
 if (fs.existsSync(TOKEN_PATH)) {
 	const savedTokens = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
 	oauth2Client.setCredentials(savedTokens);
