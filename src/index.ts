@@ -6,40 +6,18 @@ import { fileURLToPath } from "node:url";
 import { google } from "googleapis";
 import express from "express";
 import session from "express-session";
+import { oauth2Client, TOKEN_PATH } from "./googleClient.js";
 
 const EXT = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const TOKEN_PATH = path.join(__dirname, "tokens.json");
 
 // Oauth express
 
-export const oauth2Client = new google.auth.OAuth2(
-	process.env.GOOGLE_CLIENT_ID,
-	process.env.GOOGLE_CLIENT_SECRET,
-	process.env.GOOGLE_REDIRECT_URI,
-);
-
-const scopes = ["https://www.googleapis.com/auth/photoslibrary.appendonly"];
-
-oauth2Client.on("tokens", (tokens) => {
-	console.log("[GOOGLE] Token refreshed automatically!");
-
-	const currentData = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
-	const newData = { ...currentData, ...tokens };
-
-	fs.writeFileSync(TOKEN_PATH, JSON.stringify(newData, null, 2));
-});
-
-if (fs.existsSync(TOKEN_PATH)) {
-	const savedTokens = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
-	oauth2Client.setCredentials(savedTokens);
-	console.log("[GOOGLE] Loaded credentials from tokens.json");
-} else {
-	console.log(
-		"[GOOGLE] No tokens found. You must authenticate via the Web Server.",
-	);
-}
+const scopes = [
+	"https://www.googleapis.com/auth/photoslibrary.appendonly",
+	"https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
+];
 
 const app = express();
 
