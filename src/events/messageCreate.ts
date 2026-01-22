@@ -7,11 +7,9 @@ export default {
 	async execute(message: Message) {
 		if (message.author.bot) return;
 
-		console.log(message);
 		const userAttachments = message.attachments.map((val, key, map) => {
 			return val;
 		});
-		console.log(userAttachments);
 
 		if (message.channelId === eiBotTestChannelId) {
 			message.reply({
