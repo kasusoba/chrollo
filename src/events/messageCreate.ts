@@ -45,6 +45,30 @@ export default {
 			return;
 		}
 
+		const album = getAlbum();
+		const albumId = album?.id;
+
+		if (!albumId) {
+			message.reply(
+				"No album selected. Please select an album before uploading.",
+			);
+			return;
+		}
+
+		const getResponse = await oauth2Client.request({
+			url: "https://photoslibrary.googleapis.com/v1/albums",
+			method: "GET",
+		});
+
+		const albumsArray = getResponse.data.albums || [];
+
+		if (!albumsArray.find((a: any) => a.id === albumId)) {
+			message.reply(
+				"The selected album does not exist. Please select a valid album before uploading.",
+			);
+			return;
+		}
+
 		const uploadJobs = Array.from(message.attachments.values()).map(
 			(attachment) => uploadBytesToGooglePhotos(attachment),
 		);
@@ -58,16 +82,6 @@ export default {
 		}
 
 		try {
-			const album = getAlbum();
-			const albumId = album?.id;
-
-			if (!albumId) {
-				message.reply(
-					"No album selected. Please select an album before uploading.",
-				);
-				return;
-			}
-
 			const createResponse = await oauth2Client.request({
 				url: "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
 				method: "POST",

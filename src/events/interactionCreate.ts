@@ -1,5 +1,4 @@
 import { Collection, Events, MessageFlags, type Interaction } from "discord.js";
-import { userInfo } from "node:os";
 
 export default {
 	name: Events.InteractionCreate,
