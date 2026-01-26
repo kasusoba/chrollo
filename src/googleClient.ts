@@ -1,6 +1,6 @@
-import { google } from "googleapis";
 import fs from "node:fs";
 import path from "node:path";
+import { google } from "googleapis";
 
 export const TOKEN_PATH = path.join(process.cwd(), "tokens.json");
 

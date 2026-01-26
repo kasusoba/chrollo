@@ -1,7 +1,7 @@
 import {
 	REST,
-	Routes,
 	type RESTPostAPIApplicationGuildCommandsJSONBody,
+	Routes,
 } from "discord.js";
 import "dotenv/config";
 import fs from "node:fs";

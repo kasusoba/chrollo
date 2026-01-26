@@ -1,20 +1,25 @@
+import fs from "node:fs";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
 	ButtonStyle,
 	type ChatInputCommandInteraction,
+	LabelBuilder,
+	MessageFlags,
 	ModalBuilder,
 	SlashCommandBuilder,
 	StringSelectMenuBuilder,
 	StringSelectMenuOptionBuilder,
 	TextInputBuilder,
 	TextInputStyle,
-	LabelBuilder,
-	MessageFlags,
 } from "discord.js";
 import { oauth2Client } from "../../googleClient.js";
-import fs from "node:fs";
-import { ALBUM_PATH, getAlbum } from "../../utils.js";
+import {
+	ALBUM_PATH,
+	type GetAlbumsResponse,
+	type GoogleAlbum,
+	getAlbum,
+} from "../../utils.js";
 
 function saveAlbumFile(albumObject: { id: string; title: string }) {
 	if (fs.existsSync(ALBUM_PATH)) {
@@ -34,7 +39,7 @@ export const data = new SlashCommandBuilder()
 	.setDescription("Manage albums.");
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-	const getResponse = await oauth2Client.request({
+	const getResponse = await oauth2Client.request<GetAlbumsResponse>({
 		url: "https://photoslibrary.googleapis.com/v1/albums",
 		method: "GET",
 	});
@@ -45,7 +50,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 	const currentAlbumId = getAlbum()?.id;
 
-	const rows: ActionRowBuilder<any>[] = [];
+	const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
 	rows.push(
 		new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -61,7 +66,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			.setCustomId("select")
 			.setPlaceholder("Select an album")
 			.addOptions(
-				albumsArray.map((album: any) =>
+				albumsArray.map((album) =>
 					new StringSelectMenuOptionBuilder()
 						.setLabel(album.title)
 						.setValue(album.id)
@@ -129,7 +134,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 			await modalSubmission.deferUpdate();
 
-			const createResponse = await oauth2Client.request({
+			const createResponse = await oauth2Client.request<GoogleAlbum>({
 				url: "https://photoslibrary.googleapis.com/v1/albums",
 				method: "POST",
 				headers: { "Content-type": "application/json" },
@@ -161,8 +166,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			}
 
 			const albumTitle =
-				albumsArray.find((album: any) => album.id === selectedAlbumId)?.title ||
-				"";
+				albumsArray.find((album) => album.id === selectedAlbumId)?.title || "";
 
 			if (currentAlbumId !== selectedAlbumId) {
 				saveAlbumFile({

@@ -10,6 +10,18 @@ interface Album {
 	title: string;
 }
 
+export interface GoogleAlbum {
+	id: string;
+	title: string;
+	productUrl?: string;
+	isWriteable?: boolean;
+}
+
+export interface GetAlbumsResponse {
+	albums?: GoogleAlbum[];
+	nextPageToken?: string;
+}
+
 export function getAlbum(): Album | null {
 	if (fs.existsSync(ALBUM_PATH)) {
 		const data = JSON.parse(fs.readFileSync(ALBUM_PATH, "utf-8"));

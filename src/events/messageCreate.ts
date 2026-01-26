@@ -1,6 +1,10 @@
 import { type Attachment, Events, type Message } from "discord.js";
 import { oauth2Client } from "../googleClient.js";
-import { getAlbum } from "../utils.js";
+import {
+	type GetAlbumsResponse,
+	type GoogleAlbum,
+	getAlbum,
+} from "../utils.js";
 
 const eiBotTestChannelId = "1450051502348439684";
 
@@ -50,19 +54,19 @@ export default {
 
 		if (!albumId) {
 			message.reply(
-				"No album selected. Please select an album before uploading.",
+				"No album selected. Please select an album using /album before uploading.",
 			);
 			return;
 		}
 
-		const getResponse = await oauth2Client.request({
+		const getResponse = await oauth2Client.request<GetAlbumsResponse>({
 			url: "https://photoslibrary.googleapis.com/v1/albums",
 			method: "GET",
 		});
 
 		const albumsArray = getResponse.data.albums || [];
 
-		if (!albumsArray.find((a: any) => a.id === albumId)) {
+		if (!albumsArray.find((a: GoogleAlbum) => a.id === albumId)) {
 			message.reply(
 				"The selected album does not exist. Please select a valid album before uploading.",
 			);

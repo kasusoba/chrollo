@@ -1,9 +1,8 @@
 import { Client, Collection, GatewayIntentBits } from "discord.js";
 import "dotenv/config";
-import path from "node:path";
 import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { google } from "googleapis";
 import express from "express";
 import session from "express-session";
 import { oauth2Client, TOKEN_PATH } from "./googleClient.js";
@@ -29,7 +28,7 @@ app.use(
 	}),
 );
 
-app.get("/", async (req, res) => {
+app.get("/", async (_req, res) => {
 	return res.send("kararanjut");
 });
 
