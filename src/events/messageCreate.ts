@@ -1,5 +1,6 @@
-import { Attachment, Events, FileComponent, type Message } from "discord.js";
+import { type Attachment, Events, type Message } from "discord.js";
 import { oauth2Client } from "../googleClient.js";
+import { getAlbum } from "../utils.js";
 
 const eiBotTestChannelId = "1450051502348439684";
 
@@ -57,17 +58,28 @@ export default {
 		}
 
 		try {
+			const album = getAlbum();
+			const albumId = album?.id;
+
+			if (!albumId) {
+				message.reply(
+					"No album selected. Please select an album before uploading.",
+				);
+				return;
+			}
+
 			const createResponse = await oauth2Client.request({
 				url: "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
 				method: "POST",
 				data: {
+					albumId: albumId,
 					newMediaItems: successfulUploads,
 				},
 			});
 
 			console.log("Batch create success:", createResponse.data);
 			message.reply(
-				`Successfully uploaded **${successfulUploads.length}** images to Google Photos!`,
+				`Successfully uploaded **${successfulUploads.length}** images to Google Photos album **${album?.title}**!`,
 			);
 		} catch (error) {
 			console.error("Error creating media items in Google Photos:", error);
