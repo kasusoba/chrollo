@@ -95,6 +95,10 @@ export async function batchCreatePhotos(items: UploadItem[], albumId?: string) {
 }
 
 export async function uploadPhotos(attachments: Attachment[], albumId: string) {
+	if (attachments.length === 0) {
+		throw new Error("No attachments to upload.");
+	}
+
 	if (!albumId) {
 		throw new Error(
 			"No album selected. Please select an album using /album before uploading.",
@@ -110,7 +114,7 @@ export async function uploadPhotos(attachments: Attachment[], albumId: string) {
 
 	if (!albumsArray.find((a: GoogleAlbum) => a.id === albumId)) {
 		throw new Error(
-			"The selected album does not exist. Please select a valid album before uploading.",
+			"The selected album does not exist. Please select a valid album using /album before uploading.",
 		);
 	}
 

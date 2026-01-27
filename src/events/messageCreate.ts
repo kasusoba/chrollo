@@ -11,6 +11,7 @@ export default {
 			console.log("Not logged in yet");
 			return;
 		}
+		if (message.attachments.size === 0) return;
 
 		try {
 			const album = getAlbum();

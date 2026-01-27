@@ -73,6 +73,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 					return;
 				}
 
+				if (message.author.bot) {
+					interaction.followUp(
+						`Message with ID ${messageId} is from a bot, skipping upload.`,
+					);
+					return;
+				}
+
 				if (message.attachments.size === 0) {
 					interaction.followUp(
 						`No attachments found in message with ID ${messageId}.`,
@@ -97,7 +104,71 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			break;
 		}
 		case "until": {
+			const MAX_ALLOWED_MESSAGES_FETCH = 100;
+			const MAX_ALLOWED_ATTACHMENTS_PER_MSG = 10;
+			const UPLOAD_BATCH_SIZE = 5;
+
 			const messageId = interaction.options.getString("message_id", true);
+			const selectedMessage =
+				await interaction.channel?.messages.fetch(messageId);
+
+			if (!selectedMessage) {
+				interaction.followUp(`Message with ID ${messageId} not found.`);
+				return;
+			}
+			const messages = await interaction.channel?.messages.fetch({
+				after: messageId,
+				limit: MAX_ALLOWED_MESSAGES_FETCH,
+			});
+
+			if (messages) {
+				messages.set(selectedMessage.id, selectedMessage);
+			}
+
+			const filteredMessages = messages?.filter(
+				(msg) => !msg.author.bot && msg.attachments.size > 0,
+			);
+
+			if (!filteredMessages || filteredMessages.size === 0) {
+				interaction.followUp(
+					`No attachments found in messages after ID ${messageId}.`,
+				);
+				return;
+			}
+
+			try {
+				// let totalUploaded = 0;
+				// for (const msg of filteredMessages.values()) {
+				// 	const uploadResponse = await uploadPhotos(
+				// 		Array.from(msg.attachments.values()),
+				// 		albumId,
+				// 	);
+				// 	totalUploaded += uploadResponse.numOfUploaded;
+				// }
+				// interaction.followUp(
+				// 	`Successfully uploaded **${totalUploaded}** images to Google Photos album **${album?.title}**!`,
+				// );
+			} catch (error) {
+				// console.error("Error uploading photos:", error);
+				// interaction.followUp(
+				// 	error instanceof Error ? error.message : "Unknown error",
+				// );
+			}
+
+			// while (true) {
+			// let allMessages = []
+			// let afterId = messageId;
+			// const messages = await interaction.channel?.messages.fetch({
+			// 	after: afterId,
+			// 	limit: 100,
+			// });
+			// if (!messages || messages.size === 0) {
+			// 	break;
+			// }
+			// allMessages.push(...messages.values());
+
+			// }
+
 			// loop through messages from latest to oldest until messageId
 			//		[1a cont] check if message id is in uploaded list, if so skip
 			//		add attachments to upload queue / should we upload immediately?
