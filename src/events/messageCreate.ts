@@ -1,43 +1,6 @@
-import { type Attachment, Events, type Message } from "discord.js";
+import { Events, type Message } from "discord.js";
 import { oauth2Client } from "../googleClient.js";
-import {
-	type GetAlbumsResponse,
-	type GoogleAlbum,
-	getAlbum,
-} from "../utils.js";
-
-const eiBotTestChannelId = "1450051502348439684";
-
-async function uploadBytesToGooglePhotos(attachment: Attachment) {
-	try {
-		console.log(`Uploading ${attachment.name} to Google Photos...`);
-
-		const response = fetch(attachment.url);
-		const arrayBuffer = (await response).arrayBuffer();
-		const imageBuffer = Buffer.from(await arrayBuffer);
-
-		const uploadResponse = await oauth2Client.request({
-			url: "https://photoslibrary.googleapis.com/v1/uploads",
-			method: "POST",
-			headers: {
-				"Content-type": "application/octet-stream",
-				"X-Goog-Upload-Protocol": "raw",
-				"X-Goog-Upload-Content-Type": attachment.contentType || "image/png",
-			},
-			data: imageBuffer,
-		});
-
-		return {
-			simpleMediaItem: {
-				uploadToken: uploadResponse.data,
-				fileName: attachment.name,
-			},
-		};
-	} catch (error) {
-		console.error("Error uploading to Google Photos:", error);
-		return null;
-	}
-}
+import { eiBotTestChannelId, getAlbum, uploadPhotos } from "../utils.js";
 
 export default {
 	name: Events.MessageCreate,
@@ -49,59 +12,27 @@ export default {
 			return;
 		}
 
-		const album = getAlbum();
-		const albumId = album?.id;
-
-		if (!albumId) {
-			message.reply(
-				"No album selected. Please select an album using /album before uploading.",
-			);
-			return;
-		}
-
-		const getResponse = await oauth2Client.request<GetAlbumsResponse>({
-			url: "https://photoslibrary.googleapis.com/v1/albums",
-			method: "GET",
-		});
-
-		const albumsArray = getResponse.data.albums || [];
-
-		if (!albumsArray.find((a: GoogleAlbum) => a.id === albumId)) {
-			message.reply(
-				"The selected album does not exist. Please select a valid album before uploading.",
-			);
-			return;
-		}
-
-		const uploadJobs = Array.from(message.attachments.values()).map(
-			(attachment) => uploadBytesToGooglePhotos(attachment),
-		);
-
-		const uploadResults = await Promise.all(uploadJobs);
-		const successfulUploads = uploadResults.filter((result) => result !== null);
-
-		if (successfulUploads.length === 0) {
-			message.reply("No attachments to upload.");
-			return;
-		}
-
 		try {
-			const createResponse = await oauth2Client.request({
-				url: "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
-				method: "POST",
-				data: {
-					albumId: albumId,
-					newMediaItems: successfulUploads,
-				},
-			});
+			const album = getAlbum();
+			const albumId = album?.id;
 
-			console.log("Batch create success:", createResponse.data);
+			if (!albumId) {
+				message.reply(
+					"No album selected. Please select an album using /album before uploading.",
+				);
+				return;
+			}
+
+			const uploadResponse = await uploadPhotos(
+				Array.from(message.attachments.values()),
+				albumId,
+			);
 			message.reply(
-				`Successfully uploaded **${successfulUploads.length}** images to Google Photos album **${album?.title}**!`,
+				`Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album?.title}**!`,
 			);
 		} catch (error) {
-			console.error("Error creating media items in Google Photos:", error);
-			message.reply("Failed to upload photos to Google Photos.");
+			console.error("Error uploading photos:", error);
+			message.reply(error instanceof Error ? error.message : "Unknown error");
 		}
 	},
 };
