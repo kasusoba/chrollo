@@ -1,37 +1,38 @@
 {
-  "name": "manana",
-  "type": "module",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
-    "build": "tsc",
-    "deploy-command": "pnpm build && node dist/deploy-command.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.11.0",
-  "dependencies": {
-    "discord.js": "^14.25.1",
-    "dotenv": "^17.2.3",
-    "exiftool-vendored": "^35.4.0",
-    "express": "^5.2.1",
-    "express-session": "^1.18.2",
-    "google-auth-library": "^10.5.0",
-    "googleapis": "^170.1.0"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "2.3.6",
-    "@eslint/js": "^9.39.1",
-    "@types/express": "^5.0.6",
-    "@types/express-session": "^1.18.2",
-    "@types/node": "^25.0.1",
-    "@types/piexifjs": "^1.0.0",
-    "eslint": "^9.39.1",
-    "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
-  }
+	"name": "manana",
+	"type": "module",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"scripts": {
+		"dev": "tsx watch src/index.ts",
+		"start": "node dist/index.js",
+		"build": "tsc",
+		"deploy-command": "pnpm build && node dist/deployCommand.js",
+		"delete-command": "tsx src/deleteCommand.ts"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"packageManager": "pnpm@10.11.0",
+	"dependencies": {
+		"discord.js": "^14.25.1",
+		"dotenv": "^17.2.3",
+		"exiftool-vendored": "^35.4.0",
+		"express": "^5.2.1",
+		"express-session": "^1.18.2",
+		"google-auth-library": "^10.5.0",
+		"googleapis": "^170.1.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.6",
+		"@eslint/js": "^9.39.1",
+		"@types/express": "^5.0.6",
+		"@types/express-session": "^1.18.2",
+		"@types/node": "^25.0.1",
+		"@types/piexifjs": "^1.0.0",
+		"eslint": "^9.39.1",
+		"tsx": "^4.20.6",
+		"typescript": "^5.9.3"
+	}
 }

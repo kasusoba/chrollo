@@ -6,6 +6,8 @@ import { exiftool } from "exiftool-vendored";
 import { oauth2Client } from "./googleClient.js";
 
 export const eiBotTestChannelId = "1450051502348439684";
+export const omoideChannelId = "1046093481774424184";
+export const botbgmChannelId = "694798318328610886";
 
 const ALBUM_FILE_NAME = "album.json";
 
