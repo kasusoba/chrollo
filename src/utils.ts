@@ -78,76 +78,72 @@ export async function getValidatedAlbum() {
 
 export async function uploadBytesToGooglePhotos(
 	attachment: Attachment,
-	fallbackDate?: Date,
+	fallbackDate: Date,
 ): Promise<UploadItem | null> {
 	try {
-		console.log(`Uploading ${attachment.name} to Google Photos...`);
+		console.log(`Processing ${attachment.name}...`);
 
 		const response = await fetch(attachment.url);
 		const arrayBuffer = await response.arrayBuffer();
-		let imageBuffer = Buffer.from(arrayBuffer);
+		let mediaBuffer = Buffer.from(arrayBuffer);
 
-		// Only attempt to modify EXIF if we have a valid fallback date
-		// if (fallbackDate) {
-		// 	// Create a temp file path
-		// 	const tempFilePath = path.join(
-		// 		os.tmpdir(),
-		// 		`${Date.now()}_${attachment.name}`,
-		// 	);
+		const tempFilePath = path.join(
+			os.tmpdir(),
+			`${Date.now()}_${attachment.name}`,
+		);
 
-		// 	try {
-		// 		// 1. Write buffer to temp file
-		// 		await fs.promises.writeFile(tempFilePath, imageBuffer);
+		const cleanupFiles: string[] = [tempFilePath];
 
-		// 		// 2. Read existing metadata to check if we need to overwrite
-		// 		const tags = await exiftool.read(tempFilePath);
+		try {
+			await fs.promises.writeFile(tempFilePath, mediaBuffer);
 
-		// 		// Check if DateTimeOriginal exists.
-		// 		// If it exists, we usually prefer the file's original time.
-		// 		// If it is missing, we use the Discord upload time (fallbackDate).
-		// 		const hasOriginalDate = !!tags.DateTimeOriginal;
+			const tags = await exiftool.read(tempFilePath);
 
-		// 		if (!hasOriginalDate) {
-		// 			// 3. Write new metadata using ExifTool
-		// 			// ExifTool handles PNG, JPG, WebP automatically
-		// 			await exiftool.write(tempFilePath, {
-		// 				DateTimeOriginal: fallbackDate.toISOString(),
-		// 				CreateDate: fallbackDate.toISOString(),
-		// 				// "AllDates" is a shortcut in ExifTool to set generic dates
-		// 				AllDates: fallbackDate.toISOString(),
-		// 			});
+			const existingDate = tags.DateTimeOriginal || tags.CreateDate;
 
-		// 			// 4. Read the modified file back into a buffer
-		// 			imageBuffer = await fs.promises.readFile(tempFilePath);
-		// 		}
-		// 	} catch (e) {
-		// 		console.error("Error modifying EXIF with ExifTool:", e);
-		// 		// If it fails, we upload the original buffer
-		// 	} finally {
-		// 		// 5. Cleanup: Delete the temp file (and the _original backup ExifTool creates)
-		// 		try {
-		// 			if (fs.existsSync(tempFilePath))
-		// 				await fs.promises.unlink(tempFilePath);
-		// 			if (fs.existsSync(`${tempFilePath}_original`))
-		// 				await fs.promises.unlink(`${tempFilePath}_original`);
-		// 		} catch (cleanupErr) {
-		// 			console.error("Failed to cleanup temp files", cleanupErr);
-		// 		}
-		// 	}
-		// }
+			if (existingDate) {
+				console.log(
+					`> [Info] ${attachment.name} has existing EXIF date (${existingDate.toString()}). Uploading original bytes to preserve Dedup.`,
+				);
+			} else {
+				console.log(
+					`> [Warning] ${attachment.name} has NO date. Injecting Discord timestamp (${fallbackDate.toISOString()})...`,
+				);
 
-		// Upload to Google Photos
+				await exiftool.write(tempFilePath, {
+					DateTimeOriginal: fallbackDate.toISOString(),
+					CreateDate: fallbackDate.toISOString(),
+					ModifyDate: fallbackDate.toISOString(),
+
+					AllDates: fallbackDate.toISOString(),
+				});
+
+				cleanupFiles.push(`${tempFilePath}_original`);
+
+				mediaBuffer = await fs.promises.readFile(tempFilePath);
+			}
+		} catch (e) {
+			console.error("Error processing metadata:", e);
+		} finally {
+			for (const file of cleanupFiles) {
+				try {
+					if (fs.existsSync(file)) await fs.promises.unlink(file);
+				} catch (_err) {
+					/* ignore cleanup errors */
+				}
+			}
+		}
+
 		const uploadResponse = await oauth2Client.request<string>({
 			url: "https://photoslibrary.googleapis.com/v1/uploads",
 			method: "POST",
 			headers: {
 				"Content-type": "application/octet-stream",
 				"X-Goog-Upload-Protocol": "raw",
-				// Use the actual content type from Discord
 				"X-Goog-Upload-Content-Type":
 					attachment.contentType || "application/octet-stream",
 			},
-			data: imageBuffer,
+			data: mediaBuffer,
 		});
 
 		return {
@@ -182,19 +178,14 @@ export async function batchCreatePhotos(items: UploadItem[], albumId?: string) {
 export async function uploadPhotos(
 	attachments: Attachment[],
 	albumId: string,
-	options?: UploadOptions,
+	options: UploadOptions,
 ) {
 	if (attachments.length === 0) {
 		throw new Error("No attachments to upload.");
 	}
 
-	let description: string | undefined;
-	let fallbackDate: Date | undefined;
-
-	if (options) {
-		description = `Uploaded by: ${options.uploaderDisplayName} (${options.uploaderName})`;
-		fallbackDate = new Date(options.uploadTimestamp);
-	}
+	const description = `Uploaded by: ${options.uploaderDisplayName} (${options.uploaderName})`;
+	const fallbackDate = new Date(options.uploadTimestamp);
 
 	const uploadJobs = attachments.map((attachment) =>
 		uploadBytesToGooglePhotos(attachment, fallbackDate),
