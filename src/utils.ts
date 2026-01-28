@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Attachment } from "discord.js";
+import { exiftool } from "exiftool-vendored";
 import { oauth2Client } from "./googleClient.js";
 
 export const eiBotTestChannelId = "1450051502348439684";
@@ -9,7 +11,7 @@ const ALBUM_FILE_NAME = "album.json";
 
 export const ALBUM_PATH = path.join(process.cwd(), ALBUM_FILE_NAME);
 
-interface Album {
+export interface Album {
 	id: string;
 	title: string;
 }
@@ -27,10 +29,17 @@ export interface GetAlbumsResponse {
 }
 
 interface UploadItem {
+	description?: string;
 	simpleMediaItem: {
 		uploadToken: string;
 		fileName: string;
 	};
+}
+
+export interface UploadOptions {
+	uploaderName: string;
+	uploaderDisplayName: string;
+	uploadTimestamp: number;
 }
 
 export function getAlbum(): Album | null {
@@ -44,23 +53,99 @@ export function getAlbum(): Album | null {
 	}
 }
 
+export async function getValidatedAlbum() {
+	const album = getAlbum();
+
+	if (!album || !album.id) {
+		throw new Error(
+			"No album selected. Please select an album using /album before uploading.",
+		);
+	}
+
+	try {
+		await oauth2Client.request({
+			url: `https://photoslibrary.googleapis.com/v1/albums/${album.id}`,
+			method: "GET",
+		});
+
+		return album;
+	} catch (_error) {
+		throw new Error(
+			"The selected album does not exist on Google Photos. Please select a valid album using /album.",
+		);
+	}
+}
+
 export async function uploadBytesToGooglePhotos(
 	attachment: Attachment,
+	fallbackDate?: Date,
 ): Promise<UploadItem | null> {
 	try {
 		console.log(`Uploading ${attachment.name} to Google Photos...`);
 
-		const response = fetch(attachment.url);
-		const arrayBuffer = (await response).arrayBuffer();
-		const imageBuffer = Buffer.from(await arrayBuffer);
+		const response = await fetch(attachment.url);
+		const arrayBuffer = await response.arrayBuffer();
+		let imageBuffer = Buffer.from(arrayBuffer);
 
+		// Only attempt to modify EXIF if we have a valid fallback date
+		// if (fallbackDate) {
+		// 	// Create a temp file path
+		// 	const tempFilePath = path.join(
+		// 		os.tmpdir(),
+		// 		`${Date.now()}_${attachment.name}`,
+		// 	);
+
+		// 	try {
+		// 		// 1. Write buffer to temp file
+		// 		await fs.promises.writeFile(tempFilePath, imageBuffer);
+
+		// 		// 2. Read existing metadata to check if we need to overwrite
+		// 		const tags = await exiftool.read(tempFilePath);
+
+		// 		// Check if DateTimeOriginal exists.
+		// 		// If it exists, we usually prefer the file's original time.
+		// 		// If it is missing, we use the Discord upload time (fallbackDate).
+		// 		const hasOriginalDate = !!tags.DateTimeOriginal;
+
+		// 		if (!hasOriginalDate) {
+		// 			// 3. Write new metadata using ExifTool
+		// 			// ExifTool handles PNG, JPG, WebP automatically
+		// 			await exiftool.write(tempFilePath, {
+		// 				DateTimeOriginal: fallbackDate.toISOString(),
+		// 				CreateDate: fallbackDate.toISOString(),
+		// 				// "AllDates" is a shortcut in ExifTool to set generic dates
+		// 				AllDates: fallbackDate.toISOString(),
+		// 			});
+
+		// 			// 4. Read the modified file back into a buffer
+		// 			imageBuffer = await fs.promises.readFile(tempFilePath);
+		// 		}
+		// 	} catch (e) {
+		// 		console.error("Error modifying EXIF with ExifTool:", e);
+		// 		// If it fails, we upload the original buffer
+		// 	} finally {
+		// 		// 5. Cleanup: Delete the temp file (and the _original backup ExifTool creates)
+		// 		try {
+		// 			if (fs.existsSync(tempFilePath))
+		// 				await fs.promises.unlink(tempFilePath);
+		// 			if (fs.existsSync(`${tempFilePath}_original`))
+		// 				await fs.promises.unlink(`${tempFilePath}_original`);
+		// 		} catch (cleanupErr) {
+		// 			console.error("Failed to cleanup temp files", cleanupErr);
+		// 		}
+		// 	}
+		// }
+
+		// Upload to Google Photos
 		const uploadResponse = await oauth2Client.request<string>({
 			url: "https://photoslibrary.googleapis.com/v1/uploads",
 			method: "POST",
 			headers: {
 				"Content-type": "application/octet-stream",
 				"X-Goog-Upload-Protocol": "raw",
-				"X-Goog-Upload-Content-Type": attachment.contentType || "image/png",
+				// Use the actual content type from Discord
+				"X-Goog-Upload-Content-Type":
+					attachment.contentType || "application/octet-stream",
 			},
 			data: imageBuffer,
 		});
@@ -94,36 +179,36 @@ export async function batchCreatePhotos(items: UploadItem[], albumId?: string) {
 	}
 }
 
-export async function uploadPhotos(attachments: Attachment[], albumId: string) {
+export async function uploadPhotos(
+	attachments: Attachment[],
+	albumId: string,
+	options?: UploadOptions,
+) {
 	if (attachments.length === 0) {
 		throw new Error("No attachments to upload.");
 	}
 
-	if (!albumId) {
-		throw new Error(
-			"No album selected. Please select an album using /album before uploading.",
-		);
-	}
+	let description: string | undefined;
+	let fallbackDate: Date | undefined;
 
-	const getResponse = await oauth2Client.request<GetAlbumsResponse>({
-		url: "https://photoslibrary.googleapis.com/v1/albums",
-		method: "GET",
-	});
-
-	const albumsArray = getResponse.data.albums || [];
-
-	if (!albumsArray.find((a: GoogleAlbum) => a.id === albumId)) {
-		throw new Error(
-			"The selected album does not exist. Please select a valid album using /album before uploading.",
-		);
+	if (options) {
+		description = `Uploaded by: ${options.uploaderDisplayName} (${options.uploaderName})`;
+		fallbackDate = new Date(options.uploadTimestamp);
 	}
 
 	const uploadJobs = attachments.map((attachment) =>
-		uploadBytesToGooglePhotos(attachment),
+		uploadBytesToGooglePhotos(attachment, fallbackDate),
 	);
 
 	const uploadResults = await Promise.all(uploadJobs);
-	const successfulUploads = uploadResults.filter((result) => result !== null);
+	const successfulUploads = uploadResults
+		.filter((result): result is UploadItem => result !== null)
+		.map((item) => {
+			if (description) {
+				return { ...item, description };
+			}
+			return item;
+		});
 
 	if (successfulUploads.length === 0) {
 		throw new Error("No attachments to upload.");

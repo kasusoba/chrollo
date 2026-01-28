@@ -1,6 +1,11 @@
 import { Events, type Message } from "discord.js";
 import { oauth2Client } from "../googleClient.js";
-import { eiBotTestChannelId, getAlbum, uploadPhotos } from "../utils.js";
+import {
+	type Album,
+	eiBotTestChannelId,
+	getValidatedAlbum,
+	uploadPhotos,
+} from "../utils.js";
 
 export default {
 	name: Events.MessageCreate,
@@ -14,19 +19,26 @@ export default {
 		if (message.attachments.size === 0) return;
 
 		try {
-			const album = getAlbum();
-			const albumId = album?.id;
-
-			if (!albumId) {
-				message.reply(
-					"No album selected. Please select an album using /album before uploading.",
-				);
+			let album: Album;
+			try {
+				album = await getValidatedAlbum();
+			} catch (error) {
+				message.reply(error instanceof Error ? error.message : "Album error");
 				return;
 			}
+			const albumId = album.id;
 
 			const uploadResponse = await uploadPhotos(
 				Array.from(message.attachments.values()),
 				albumId,
+				{
+					uploaderName: message.author.username,
+					uploaderDisplayName:
+						message.member?.displayName ??
+						message.author.displayName ??
+						message.author.username,
+					uploadTimestamp: message.createdTimestamp,
+				},
 			);
 			message.reply(
 				`Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album?.title}**!`,

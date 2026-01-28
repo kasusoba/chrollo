@@ -1,8 +1,10 @@
 import {
 	type ChatInputCommandInteraction,
+	Colors,
+	EmbedBuilder,
 	SlashCommandBuilder,
 } from "discord.js";
-import { getAlbum, uploadPhotos } from "../../utils.js";
+import { type Album, getValidatedAlbum, uploadPhotos } from "../../utils.js";
 
 export const data = new SlashCommandBuilder()
 	.setName("upload")
@@ -21,11 +23,13 @@ export const data = new SlashCommandBuilder()
 	.addSubcommand((subcommand) =>
 		subcommand
 			.setName("until")
-			.setDescription("Upload from latest to oldest until the message id")
+			.setDescription(
+				"Upload all messages STARTING from this ID up to the latest",
+			)
 			.addStringOption((option) =>
 				option
 					.setName("message_id")
-					.setDescription("The message id to stop uploading attachments at")
+					.setDescription("The message id to start uploading from")
 					.setRequired(true),
 			),
 	)
@@ -48,137 +52,186 @@ export const data = new SlashCommandBuilder()
 	);
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+	const MAX_ALLOWED_MESSAGES_FETCH = 100;
 	const subcommand = interaction.options.getSubcommand();
 
-	const album = getAlbum();
-	const albumId = album?.id;
-
-	if (!albumId) {
-		interaction.reply(
-			"No album selected. Please select an album using /album before uploading.",
-		);
+	let album: Album;
+	try {
+		album = await getValidatedAlbum();
+	} catch (error) {
+		await interaction.reply({
+			content: error instanceof Error ? error.message : "Album error",
+			ephemeral: true,
+		});
 		return;
 	}
+	const albumId = album.id;
 
 	await interaction.deferReply();
+
+	let totalUploaded = 0;
+	let totalScanned = 0;
+	let lastUpdateTimestamp = 0;
+
+	const updateProgress = async (status: string, force = false) => {
+		const now = Date.now();
+
+		if (!force && now - lastUpdateTimestamp < 2000) return;
+
+		lastUpdateTimestamp = now;
+
+		const embed = new EmbedBuilder()
+			.setTitle(`📷 Uploading to: ${album.title}`)
+			.setColor(Colors.Blue)
+			.setDescription(status)
+			.addFields(
+				{ name: "Messages Scanned", value: `${totalScanned}`, inline: true },
+				{ name: "Photos Uploaded", value: `${totalUploaded}`, inline: true },
+			)
+			.setFooter({ text: "Please wait while the bot processes images..." });
+
+		await interaction.editReply({ content: "", embeds: [embed] });
+	};
 
 	switch (subcommand) {
 		case "id": {
 			try {
+				await updateProgress("Fetching message...");
 				const messageId = interaction.options.getString("message_id", true);
 				const message = await interaction.channel?.messages.fetch(messageId);
 
 				if (!message) {
-					interaction.followUp(`Message with ID ${messageId} not found.`);
+					await interaction.editReply({
+						content: `❌ Message with ID ${messageId} not found.`,
+						embeds: [],
+					});
 					return;
 				}
 
-				if (message.author.bot) {
-					interaction.followUp(
-						`Message with ID ${messageId} is from a bot, skipping upload.`,
-					);
+				if (message.author.bot || message.attachments.size === 0) {
+					await interaction.editReply({
+						content: `❌ Message ${messageId} is either from a bot or has no attachments.`,
+						embeds: [],
+					});
 					return;
 				}
 
-				if (message.attachments.size === 0) {
-					interaction.followUp(
-						`No attachments found in message with ID ${messageId}.`,
-					);
-					return;
-				}
-
+				await updateProgress("Uploading photo...");
 				const uploadResponse = await uploadPhotos(
 					Array.from(message.attachments.values()),
 					albumId,
+					{
+						uploaderName: message.author.username,
+						uploaderDisplayName:
+							message.author.displayName || message.author.username,
+						uploadTimestamp: message.createdTimestamp,
+					},
 				);
-				interaction.followUp(
-					`Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album?.title}**!`,
-				);
+
+				const successEmbed = new EmbedBuilder()
+					.setTitle("✅ Upload Complete")
+					.setColor(Colors.Green)
+					.setDescription(
+						`Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album.title}**!`,
+					);
+
+				await interaction.editReply({ content: "", embeds: [successEmbed] });
 			} catch (error) {
 				console.error("Error uploading photos:", error);
-				interaction.followUp(
-					error instanceof Error ? error.message : "Unknown error",
+				await interaction.editReply(
+					`❌ Error: ${error instanceof Error ? error.message : "Unknown error"}`,
 				);
 			}
 
 			break;
 		}
-		case "until": {
-			const MAX_ALLOWED_MESSAGES_FETCH = 100;
-			const MAX_ALLOWED_ATTACHMENTS_PER_MSG = 10;
-			const UPLOAD_BATCH_SIZE = 5;
 
+		case "until": {
 			const messageId = interaction.options.getString("message_id", true);
 			const selectedMessage =
 				await interaction.channel?.messages.fetch(messageId);
 
 			if (!selectedMessage) {
-				interaction.followUp(`Message with ID ${messageId} not found.`);
-				return;
-			}
-			const messages = await interaction.channel?.messages.fetch({
-				after: messageId,
-				limit: MAX_ALLOWED_MESSAGES_FETCH,
-			});
-
-			if (messages) {
-				messages.set(selectedMessage.id, selectedMessage);
-			}
-
-			const filteredMessages = messages?.filter(
-				(msg) => !msg.author.bot && msg.attachments.size > 0,
-			);
-
-			if (!filteredMessages || filteredMessages.size === 0) {
-				interaction.followUp(
-					`No attachments found in messages after ID ${messageId}.`,
+				await interaction.editReply(
+					`❌ Message with ID ${messageId} not found.`,
 				);
 				return;
 			}
 
-			try {
-				// let totalUploaded = 0;
-				// for (const msg of filteredMessages.values()) {
-				// 	const uploadResponse = await uploadPhotos(
-				// 		Array.from(msg.attachments.values()),
-				// 		albumId,
-				// 	);
-				// 	totalUploaded += uploadResponse.numOfUploaded;
-				// }
-				// interaction.followUp(
-				// 	`Successfully uploaded **${totalUploaded}** images to Google Photos album **${album?.title}**!`,
-				// );
-			} catch (error) {
-				// console.error("Error uploading photos:", error);
-				// interaction.followUp(
-				// 	error instanceof Error ? error.message : "Unknown error",
-				// );
+			await updateProgress("Starting batch process...");
+
+			let i = 0;
+			let messageIdPointer = messageId;
+
+			while (true) {
+				const messages = await interaction.channel?.messages.fetch({
+					after: messageIdPointer,
+					limit: MAX_ALLOWED_MESSAGES_FETCH,
+				});
+
+				if (!messages || messages.size === 0) {
+					break;
+				}
+
+				// If it's the very first loop, include the starting message manually
+				if (i === 0) {
+					messages.set(selectedMessage.id, selectedMessage);
+				}
+
+				totalScanned += messages.size;
+
+				await updateProgress("🔍 Scanning messages and uploading...");
+
+				const messagesWithAttachments = messages.filter(
+					(msg) => !msg.author.bot && msg.attachments.size > 0,
+				);
+
+				for (const msg of messagesWithAttachments.values()) {
+					const attachmentsToUpload = Array.from(msg.attachments.values());
+
+					try {
+						const uploadResponse = await uploadPhotos(
+							attachmentsToUpload,
+							albumId,
+							{
+								uploaderName: msg.author.username,
+								uploaderDisplayName:
+									msg.author.displayName || msg.author.username,
+								uploadTimestamp: msg.createdTimestamp,
+							},
+						);
+						totalUploaded += uploadResponse.numOfUploaded;
+
+						await updateProgress("🚀 Uploading found images...");
+					} catch (error) {
+						console.error(
+							`Error uploading photos from message ID ${msg.id}:`,
+							error,
+						);
+					}
+				}
+
+				const newestMessageInBatch = messages.first();
+				if (!newestMessageInBatch) break;
+				messageIdPointer = newestMessageInBatch.id;
+
+				await updateProgress("🔍 Scanning next batch...");
+				i += 1;
 			}
 
-			// while (true) {
-			// let allMessages = []
-			// let afterId = messageId;
-			// const messages = await interaction.channel?.messages.fetch({
-			// 	after: afterId,
-			// 	limit: 100,
-			// });
-			// if (!messages || messages.size === 0) {
-			// 	break;
-			// }
-			// allMessages.push(...messages.values());
+			const doneEmbed = new EmbedBuilder()
+				.setTitle("✅ Batch Upload Complete")
+				.setColor(Colors.Green)
+				.setDescription(`Process finished for album **${album.title}**.`)
+				.addFields(
+					{ name: "Total Scanned", value: `${totalScanned}`, inline: true },
+					{ name: "Total Uploaded", value: `${totalUploaded}`, inline: true },
+				);
 
-			// }
-
-			// loop through messages from latest to oldest until messageId
-			//		[1a cont] check if message id is in uploaded list, if so skip
-			//		add attachments to upload queue / should we upload immediately?
-			//		if upload immediately, after upload add message id to uploaded list to avoid duplicates. (ds: nested object json: channelId -> keys of messageIds so it's fast to check o(1)) [1a]
-			//		what if queue? i feel like it's not the way, because if we have queue won't we have double the loop?
-			//		stop when messageId is reached
-
-			// after all uploads, save uploaded list to file
+			await interaction.editReply({ content: "", embeds: [doneEmbed] });
 			break;
 		}
+
 		case "range": {
 			const startMessageId = interaction.options.getString(
 				"start_message_id",
@@ -189,7 +242,107 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 				true,
 			);
 
-			// same logic as until but with start and end?
+			await updateProgress("Locating start/end messages...");
+
+			const startMessage =
+				await interaction.channel?.messages.fetch(startMessageId);
+			const endMessage =
+				await interaction.channel?.messages.fetch(endMessageId);
+
+			if (!startMessage || !endMessage) {
+				await interaction.editReply(
+					"❌ One or both messages could not be found.",
+				);
+				return;
+			}
+
+			// Normalize: Ensure we know which is older and which is newer
+			let olderMessage: typeof startMessage;
+			let newerMessage: typeof endMessage;
+
+			if (startMessage.createdTimestamp > endMessage.createdTimestamp) {
+				newerMessage = startMessage;
+				olderMessage = endMessage;
+			} else {
+				newerMessage = endMessage;
+				olderMessage = startMessage;
+			}
+
+			const olderMessageId = olderMessage.id;
+			const newerTimestamp = newerMessage.createdTimestamp;
+
+			let i = 0;
+			let messageIdPointer = olderMessageId;
+			let finished = false;
+
+			await updateProgress("Starting range scan...");
+
+			while (!finished) {
+				const messages = await interaction.channel?.messages.fetch({
+					after: messageIdPointer,
+					limit: MAX_ALLOWED_MESSAGES_FETCH,
+				});
+
+				if (!messages || messages.size === 0) {
+					break;
+				}
+
+				if (i === 0) {
+					messages.set(olderMessage.id, olderMessage);
+				}
+
+				const validMessages = messages.filter((msg) => {
+					return (
+						!msg.author.bot &&
+						msg.attachments.size > 0 &&
+						msg.createdTimestamp <= newerTimestamp
+					);
+				});
+
+				await updateProgress("🔍 Scanning messages and uploading...");
+
+				for (const msg of validMessages.values()) {
+					try {
+						const res = await uploadPhotos(
+							Array.from(msg.attachments.values()),
+							albumId,
+							{
+								uploaderName: msg.author.username,
+								uploaderDisplayName:
+									msg.author.displayName || msg.author.username,
+								uploadTimestamp: msg.createdTimestamp,
+							},
+						);
+						totalUploaded += res.numOfUploaded;
+						await updateProgress("🚀 Uploading in range...");
+					} catch (error) {
+						console.error(`Error uploading msg ${msg.id}:`, error);
+					}
+				}
+
+				const newestMessageInBatch = messages.first();
+				if (!newestMessageInBatch) break;
+
+				if (newestMessageInBatch.createdTimestamp >= newerTimestamp) {
+					finished = true;
+				} else {
+					messageIdPointer = newestMessageInBatch.id;
+				}
+
+				await updateProgress("🔍 Scanning next batch...");
+				i += 1;
+			}
+
+			const rangeDoneEmbed = new EmbedBuilder()
+				.setTitle("✅ Range Upload Complete")
+				.setColor(Colors.Green)
+				.setDescription(`Range processing finished for **${album.title}**.`)
+				.addFields(
+					{ name: "Messages Scanned", value: `${totalScanned}`, inline: true },
+					{ name: "Photos Uploaded", value: `${totalUploaded}`, inline: true },
+				);
+
+			await interaction.editReply({ content: "", embeds: [rangeDoneEmbed] });
 
 			break;
 		}
