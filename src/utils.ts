@@ -44,6 +44,64 @@ export interface UploadOptions {
 	uploadTimestamp: number;
 }
 
+// --- ERROR HANDLING HELPERS ---
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wraps an API request with retry logic based on Google Cloud API recommendations.
+ * - 5xx: Exponential backoff (starting at 1s)
+ * - 429: Wait 30s minimum
+ * - Other 4xx: Fail immediately
+ */
+async function requestWithRetry<T>(
+	requestFn: () => Promise<T>,
+	operationName = "API Request",
+): Promise<T> {
+	let attempt = 0;
+	let delay = 1000; // Start with 1 second for 5xx errors
+	const maxRetries = 5;
+
+	while (true) {
+		try {
+			return await requestFn();
+		} catch (error: any) {
+			attempt++;
+			const status = error.response?.status || error.code;
+
+			// If we've maxed out retries, or if it's a non-retriable error (like 400, 401, 404)
+			// Note: 429 and 5xx are the main targets for retry
+			const isRetriable =
+				status === 429 || (typeof status === "number" && status >= 500);
+
+			if (attempt > maxRetries || !isRetriable) {
+				throw error;
+			}
+
+			let waitTime = 0;
+
+			if (status === 429) {
+				console.warn(
+					`[${operationName}] Hit Rate Limit (429). Waiting 30s before retry ${attempt}/${maxRetries}...`,
+				);
+				// Doc says: "For 429 errors, the client may retry with minimum 30s delay."
+				waitTime = 30000 + Math.random() * 1000; // 30s + small jitter
+			} else {
+				// 5xx Errors
+				console.warn(
+					`[${operationName}] Server Error (${status}). Retrying in ${delay}ms (Attempt ${attempt}/${maxRetries})...`,
+				);
+				waitTime = delay;
+				delay *= 2; // Exponential backoff: 1s -> 2s -> 4s -> 8s...
+			}
+
+			await sleep(waitTime);
+		}
+	}
+}
+
+// ------------------------------
+
 export function getAlbum(): Album | null {
 	if (fs.existsSync(ALBUM_PATH)) {
 		const data = JSON.parse(fs.readFileSync(ALBUM_PATH, "utf-8"));
@@ -65,10 +123,15 @@ export async function getValidatedAlbum() {
 	}
 
 	try {
-		await oauth2Client.request({
-			url: `https://photoslibrary.googleapis.com/v1/albums/${album.id}`,
-			method: "GET",
-		});
+		// Wrapped in retry logic
+		await requestWithRetry(
+			() =>
+				oauth2Client.request({
+					url: `https://photoslibrary.googleapis.com/v1/albums/${album.id}`,
+					method: "GET",
+				}),
+			"Get Album",
+		);
 
 		return album;
 	} catch (_error) {
@@ -85,7 +148,11 @@ export async function uploadBytesToGooglePhotos(
 	try {
 		console.log(`Processing ${attachment.name}...`);
 
+		// Note: We are not retrying the Discord download here, but you could wrap this fetch in a retry too if needed.
 		const response = await fetch(attachment.url);
+		if (!response.ok)
+			throw new Error(`Failed to fetch attachment: ${response.statusText}`);
+
 		const arrayBuffer = await response.arrayBuffer();
 		let mediaBuffer = Buffer.from(arrayBuffer);
 
@@ -100,7 +167,6 @@ export async function uploadBytesToGooglePhotos(
 			await fs.promises.writeFile(tempFilePath, mediaBuffer);
 
 			const tags = await exiftool.read(tempFilePath);
-
 			const existingDate = tags.DateTimeOriginal || tags.CreateDate;
 
 			if (existingDate) {
@@ -116,12 +182,10 @@ export async function uploadBytesToGooglePhotos(
 					DateTimeOriginal: fallbackDate.toISOString(),
 					CreateDate: fallbackDate.toISOString(),
 					ModifyDate: fallbackDate.toISOString(),
-
 					AllDates: fallbackDate.toISOString(),
 				});
 
 				cleanupFiles.push(`${tempFilePath}_original`);
-
 				mediaBuffer = await fs.promises.readFile(tempFilePath);
 			}
 		} catch (e) {
@@ -136,17 +200,23 @@ export async function uploadBytesToGooglePhotos(
 			}
 		}
 
-		const uploadResponse = await oauth2Client.request<string>({
-			url: "https://photoslibrary.googleapis.com/v1/uploads",
-			method: "POST",
-			headers: {
-				"Content-type": "application/octet-stream",
-				"X-Goog-Upload-Protocol": "raw",
-				"X-Goog-Upload-Content-Type":
-					attachment.contentType || "application/octet-stream",
-			},
-			data: mediaBuffer,
-		});
+		// Wrapped in retry logic
+		// Uploads are the most likely to fail due to network hiccups (5xx)
+		const uploadResponse = await requestWithRetry(
+			() =>
+				oauth2Client.request<string>({
+					url: "https://photoslibrary.googleapis.com/v1/uploads",
+					method: "POST",
+					headers: {
+						"Content-type": "application/octet-stream",
+						"X-Goog-Upload-Protocol": "raw",
+						"X-Goog-Upload-Content-Type":
+							attachment.contentType || "application/octet-stream",
+					},
+					data: mediaBuffer,
+				}),
+			`Upload Bytes: ${attachment.name}`,
+		);
 
 		return {
 			simpleMediaItem: {
@@ -162,18 +232,25 @@ export async function uploadBytesToGooglePhotos(
 
 export async function batchCreatePhotos(items: UploadItem[], albumId?: string) {
 	try {
-		const createResponse = await oauth2Client.request({
-			url: "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
-			method: "POST",
-			data: {
-				albumId: albumId ? albumId : undefined,
-				newMediaItems: items,
-			},
-		});
+		// Wrapped in retry logic
+		const createResponse = await requestWithRetry(
+			() =>
+				oauth2Client.request({
+					url: "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
+					method: "POST",
+					data: {
+						albumId: albumId ? albumId : undefined,
+						newMediaItems: items,
+					},
+				}),
+			"Batch Create Media",
+		);
 
 		console.log("Batch create success:", createResponse.data);
 	} catch (error) {
 		console.error("Error creating media items in Google Photos:", error);
+		// Note: If batchCreate fails partly, you might need deeper inspection of createResponse.data
+		// but for network errors, the retry handles it.
 	}
 }
 
@@ -189,6 +266,7 @@ export async function uploadPhotos(
 	const description = `Uploaded by: ${options.uploaderDisplayName} (${options.uploaderName})`;
 	const fallbackDate = new Date(options.uploadTimestamp);
 
+	// Execute uploads in parallel
 	const uploadJobs = attachments.map((attachment) =>
 		uploadBytesToGooglePhotos(attachment, fallbackDate),
 	);
