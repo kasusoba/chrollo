@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { Attachment } from "discord.js";
 import { exiftool } from "exiftool-vendored";
 import { oauth2Client } from "./googleClient.js";
@@ -141,6 +143,34 @@ export async function getValidatedAlbum() {
 	}
 }
 
+const execFileAsync = promisify(execFile);
+
+// Helper: Run FFmpeg specifically for video dates
+async function modifyVideoDate(
+	inputPath: string,
+	outputPath: string,
+	date: Date,
+) {
+	// Format date for FFmpeg: "YYYY-MM-DD HH:MM:SS"
+	const dateStr = date.toISOString().replace("T", " ").split(".")[0];
+
+	// Arguments matching your successful Python script
+	const args = [
+		"-i",
+		inputPath,
+		"-c",
+		"copy", // Copy stream (fast)
+		"-map_metadata",
+		"0", // Keep other metadata
+		"-metadata",
+		`creation_time=${dateStr}`, // Inject date
+		"-y", // Overwrite output
+		outputPath,
+	];
+
+	await execFileAsync("ffmpeg", args);
+}
+
 export async function uploadBytesToGooglePhotos(
 	attachment: Attachment,
 	fallbackDate: Date,
@@ -148,75 +178,79 @@ export async function uploadBytesToGooglePhotos(
 	try {
 		console.log(`Processing ${attachment.name}...`);
 
-		// Note: We are not retrying the Discord download here, but you could wrap this fetch in a retry too if needed.
 		const response = await fetch(attachment.url);
-		if (!response.ok)
-			throw new Error(`Failed to fetch attachment: ${response.statusText}`);
-
 		const arrayBuffer = await response.arrayBuffer();
-		let mediaBuffer = Buffer.from(arrayBuffer);
 
-		const tempFilePath = path.join(
-			os.tmpdir(),
-			`${Date.now()}_${attachment.name}`,
-		);
+		const tempDir = os.tmpdir();
+		const baseName = `${Date.now()}_${attachment.name}`;
+		const inputPath = path.join(tempDir, baseName);
+		const outputPath = path.join(tempDir, `processed_${baseName}`);
 
-		const cleanupFiles: string[] = [tempFilePath];
+		// List of files to delete later
+		const cleanupFiles = [inputPath, outputPath];
+
+		// Determine File Type
+		const ext = path.extname(attachment.name).toLowerCase();
+		const isVideo = [".mp4", ".mov", ".mkv", ".avi", ".webm"].includes(ext);
+
+		let finalBuffer: Buffer;
 
 		try {
-			await fs.promises.writeFile(tempFilePath, mediaBuffer);
+			// 1. Write the raw download to disk
+			await fs.promises.writeFile(inputPath, Buffer.from(arrayBuffer));
 
-			const tags = await exiftool.read(tempFilePath);
-			const existingDate = tags.DateTimeOriginal || tags.CreateDate;
-
-			if (existingDate) {
-				console.log(
-					`> [Info] ${attachment.name} has existing EXIF date (${existingDate.toString()}). Uploading original bytes to preserve Dedup.`,
-				);
-			} else {
-				console.log(
-					`> [Warning] ${attachment.name} has NO date. Injecting Discord timestamp (${fallbackDate.toISOString()})...`,
-				);
-
-				await exiftool.write(tempFilePath, {
-					DateTimeOriginal: fallbackDate.toISOString(),
-					CreateDate: fallbackDate.toISOString(),
-					ModifyDate: fallbackDate.toISOString(),
-					AllDates: fallbackDate.toISOString(),
-				});
-
-				cleanupFiles.push(`${tempFilePath}_original`);
-				mediaBuffer = await fs.promises.readFile(tempFilePath);
-			}
-		} catch (e) {
-			console.error("Error processing metadata:", e);
-		} finally {
-			for (const file of cleanupFiles) {
+			if (isVideo) {
+				// --- VIDEO STRATEGY: FFmpeg ---
+				console.log("> Type: Video. Using FFmpeg (Nuclear Option)...");
 				try {
-					if (fs.existsSync(file)) await fs.promises.unlink(file);
-				} catch (_err) {
-					/* ignore cleanup errors */
+					await modifyVideoDate(inputPath, outputPath, fallbackDate);
+					// Read the NEW file created by FFmpeg
+					finalBuffer = await fs.promises.readFile(outputPath);
+				} catch (e) {
+					console.error("FFmpeg failed, falling back to original:", e);
+					finalBuffer = await fs.promises.readFile(inputPath);
+				}
+			} else {
+				// --- IMAGE STRATEGY: ExifTool ---
+				console.log("> Type: Image. Using ExifTool...");
+
+				// Read tags first to preserve existing dates (deduplication check)
+				const tags = await exiftool.read(inputPath);
+				if (tags.DateTimeOriginal) {
+					console.log("> Existing EXIF found. Skipping modification.");
+					finalBuffer = await fs.promises.readFile(inputPath);
+				} else {
+					// Write tags
+					await exiftool.write(inputPath, {
+						DateTimeOriginal: fallbackDate.toISOString(),
+						CreateDate: fallbackDate.toISOString(),
+						ModifyDate: fallbackDate.toISOString(),
+						AllDates: fallbackDate.toISOString(),
+					});
+
+					cleanupFiles.push(`${inputPath}_original`); // Exiftool backup file
+					finalBuffer = await fs.promises.readFile(inputPath);
 				}
 			}
+		} finally {
+			// Cleanup temp files (Non-blocking)
+			Promise.all(
+				cleanupFiles.map((f) => fs.promises.unlink(f).catch(() => {})),
+			);
 		}
 
-		// Wrapped in retry logic
-		// Uploads are the most likely to fail due to network hiccups (5xx)
-		const uploadResponse = await requestWithRetry(
-			() =>
-				oauth2Client.request<string>({
-					url: "https://photoslibrary.googleapis.com/v1/uploads",
-					method: "POST",
-					headers: {
-						"Content-type": "application/octet-stream",
-						"X-Goog-Upload-Protocol": "raw",
-						"X-Goog-Upload-Content-Type":
-							attachment.contentType || "application/octet-stream",
-					},
-					data: mediaBuffer,
-				}),
-			`Upload Bytes: ${attachment.name}`,
-		);
+		// Upload to Google Photos
+		const uploadResponse = await oauth2Client.request<string>({
+			url: "https://photoslibrary.googleapis.com/v1/uploads",
+			method: "POST",
+			headers: {
+				"Content-type": "application/octet-stream",
+				"X-Goog-Upload-Protocol": "raw",
+				"X-Goog-Upload-Content-Type":
+					attachment.contentType || "application/octet-stream",
+			},
+			data: finalBuffer,
+		});
 
 		return {
 			simpleMediaItem: {
