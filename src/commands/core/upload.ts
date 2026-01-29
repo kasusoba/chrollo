@@ -2,6 +2,7 @@ import {
 	type ChatInputCommandInteraction,
 	Colors,
 	EmbedBuilder,
+	MessageFlags,
 	SlashCommandBuilder,
 } from "discord.js";
 import { type Album, getValidatedAlbum, uploadPhotos } from "../../utils.js";
@@ -67,7 +68,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	}
 	const albumId = album.id;
 
-	await interaction.deferReply();
+	await interaction.deferReply({
+		flags: MessageFlags.Ephemeral,
+	});
 
 	let totalUploaded = 0;
 	let totalScanned = 0;

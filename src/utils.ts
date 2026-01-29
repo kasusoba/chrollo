@@ -46,6 +46,11 @@ export interface UploadOptions {
 	uploadTimestamp: number;
 }
 
+export interface SearchMediaItemsResponse {
+	mediaItems?: { id: string }[];
+	nextPageToken?: string;
+}
+
 // --- ERROR HANDLING HELPERS ---
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -262,6 +267,97 @@ export async function uploadBytesToGooglePhotos(
 		console.error("Error uploading to Google Photos:", error);
 		return null;
 	}
+}
+
+// --- NEW UTILITIES ---
+
+/**
+ * Fetches ALL media item IDs from a specific album.
+ * Handles pagination automatically.
+ */
+export async function getAllMediaItemsInAlbum(
+	albumId: string,
+): Promise<string[]> {
+	const mediaItemIds: string[] = [];
+	let nextPageToken: string | undefined;
+
+	console.log(`[Album Purge] Fetching items for album ${albumId}...`);
+
+	do {
+		// eslint-disable-next-line no-await-in-loop
+		const response = await requestWithRetry(
+			() =>
+				oauth2Client.request<SearchMediaItemsResponse>({
+					url: "https://photoslibrary.googleapis.com/v1/mediaItems:search",
+					method: "POST",
+					data: {
+						albumId: albumId,
+						pageSize: "100", // Max allowed by API
+						pageToken: nextPageToken,
+					},
+				}),
+			"Search Media Items",
+		);
+
+		if (response.data.mediaItems) {
+			const ids = response.data.mediaItems.map((item) => item.id);
+			mediaItemIds.push(...ids);
+		}
+
+		nextPageToken = response.data.nextPageToken;
+	} while (nextPageToken);
+
+	console.log(`[Album Purge] Found ${mediaItemIds.length} total items.`);
+	return mediaItemIds;
+}
+
+/**
+ * Removes media items from an album in batches of 50 (API limit).
+ */
+export async function batchRemoveMediaItems(
+	albumId: string,
+	mediaItemIds: string[],
+) {
+	// Chunk into arrays of 50
+	const chunkSize = 50;
+	const chunks = [];
+	for (let i = 0; i < mediaItemIds.length; i += chunkSize) {
+		chunks.push(mediaItemIds.slice(i, i + chunkSize));
+	}
+
+	console.log(
+		`[Album Purge] Removing ${mediaItemIds.length} items in ${chunks.length} batches...`,
+	);
+
+	let removedCount = 0;
+
+	for (const [index, chunk] of chunks.entries()) {
+		try {
+			// eslint-disable-next-line no-await-in-loop
+			await requestWithRetry(
+				() =>
+					oauth2Client.request({
+						url: `https://photoslibrary.googleapis.com/v1/albums/${albumId}:batchRemoveMediaItems`,
+						method: "POST",
+						headers: { "Content-type": "application/json" },
+						data: {
+							mediaItemIds: chunk,
+						},
+					}),
+				"Batch Remove",
+			);
+			removedCount += chunk.length;
+			console.log(
+				`[Album Purge] Batch ${index + 1}/${chunks.length} successful.`,
+			);
+		} catch (error) {
+			console.error(`[Album Purge] Failed batch ${index + 1}:`, error);
+			// We throw here because partial success isn't supported well in the UI feedback
+			throw error;
+		}
+	}
+
+	return removedCount;
 }
 
 export async function batchCreatePhotos(items: UploadItem[], albumId?: string) {

@@ -21,21 +21,21 @@ const commandId = "asd"; // Replace with the actual command ID to delete
 
 		// OPTION B: Delete Guild Specific Command (Uncomment if you use guild commands)
 		if (!DISCORD_GUILD_ID) throw new Error("Missing GUILD_ID");
-		await rest.delete(
-			Routes.applicationGuildCommand(
-				DISCORD_CLIENT_ID,
-				DISCORD_GUILD_ID,
-				commandId,
-			),
-		);
+		// await rest.delete(
+		// 	Routes.applicationGuildCommand(
+		// 		DISCORD_CLIENT_ID,
+		// 		DISCORD_GUILD_ID,
+		// 		commandId,
+		// 	),
+		// );
 
-		// rest
-		// 	.put(
-		// 		Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID),
-		// 		{ body: [] },
-		// 	)
-		// 	.then(() => console.log("Successfully deleted all guild commands."))
-		// 	.catch(console.error);
+		rest
+			.put(
+				Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID),
+				{ body: [] },
+			)
+			.then(() => console.log("Successfully deleted all guild commands."))
+			.catch(console.error);
 
 		console.log(`✅ Successfully deleted command ${commandId}`);
 	} catch (error) {

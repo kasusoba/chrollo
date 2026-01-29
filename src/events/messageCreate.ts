@@ -13,10 +13,10 @@ export default {
 	name: Events.MessageCreate,
 	async execute(message: Message) {
 		if (message.author.bot) return;
-		// if (message.channelId !== eiBotTestChannelId) return;
 		if (
 			message.channelId !== omoideChannelId &&
-			message.channelId !== botbgmChannelId
+			message.channelId !== botbgmChannelId &&
+			message.channelId !== eiBotTestChannelId
 		)
 			return;
 

@@ -1,14 +1,19 @@
 import { Collection, Events, type Interaction, MessageFlags } from "discord.js";
-import { botbgmChannelId, omoideChannelId } from "../utils.js";
+import {
+	botbgmChannelId,
+	eiBotTestChannelId,
+	omoideChannelId,
+} from "../utils.js";
 
 export default {
 	name: Events.InteractionCreate,
 	async execute(interaction: Interaction) {
 		if (!interaction.isChatInputCommand()) return;
-		// if (interaction.channelId !== eiBotTestChannelId) return;
+
 		if (
 			interaction.channelId !== omoideChannelId &&
-			interaction.channelId !== botbgmChannelId
+			interaction.channelId !== botbgmChannelId &&
+			interaction.channelId !== eiBotTestChannelId
 		)
 			return;
 

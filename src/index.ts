@@ -16,6 +16,7 @@ const __dirname = path.dirname(__filename);
 const scopes = [
 	"https://www.googleapis.com/auth/photoslibrary.appendonly",
 	"https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
+	"https://www.googleapis.com/auth/photoslibrary.edit.appcreateddata",
 ];
 
 const app = express();
