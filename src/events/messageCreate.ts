@@ -24,7 +24,8 @@ export default {
 			console.log("Not logged in yet");
 			return;
 		}
-		if (message.attachments.size === 0) return;
+		if (message.attachments.size === 0 && message.messageSnapshots.size === 0)
+			return;
 
 		try {
 			let album: Album;
@@ -36,8 +37,14 @@ export default {
 			}
 			const albumId = album.id;
 
+			const forwardedAttachments = message.messageSnapshots.size
+				? Array.from(message.messageSnapshots.values()).flatMap((snapshot) =>
+						Array.from(snapshot.attachments.values()),
+					)
+				: [];
+
 			const uploadResponse = await uploadPhotos(
-				Array.from(message.attachments.values()),
+				Array.from(message.attachments.values()).concat(forwardedAttachments),
 				albumId,
 				{
 					uploaderName: message.author.username,

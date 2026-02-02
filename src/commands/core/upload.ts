@@ -119,9 +119,15 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 					return;
 				}
 
+				const forwardedAttachments = message.messageSnapshots.size
+					? Array.from(message.messageSnapshots.values()).flatMap((snapshot) =>
+							Array.from(snapshot.attachments.values()),
+						)
+					: [];
+
 				await updateProgress("Uploading photo...");
 				const uploadResponse = await uploadPhotos(
-					Array.from(message.attachments.values()),
+					Array.from(message.attachments.values()).concat(forwardedAttachments),
 					albumId,
 					{
 						uploaderName: message.author.username,
@@ -186,11 +192,21 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 				await updateProgress("🔍 Scanning messages and uploading...");
 
 				const messagesWithAttachments = messages.filter(
-					(msg) => !msg.author.bot && msg.attachments.size > 0,
+					(msg) =>
+						!msg.author.bot &&
+						(msg.attachments.size > 0 ||
+							(msg.messageSnapshots.size > 0 &&
+								(msg.messageSnapshots.first()?.attachments?.size ?? 0) > 0)),
 				);
 
 				for (const msg of messagesWithAttachments.values()) {
 					const attachmentsToUpload = Array.from(msg.attachments.values());
+					const forwardedAttachments = msg.messageSnapshots.size
+						? Array.from(msg.messageSnapshots.values()).flatMap((snapshot) =>
+								Array.from(snapshot.attachments.values()),
+							)
+						: [];
+					attachmentsToUpload.push(...forwardedAttachments);
 
 					try {
 						const uploadResponse = await uploadPhotos(
@@ -297,7 +313,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 				const validMessages = messages.filter((msg) => {
 					return (
 						!msg.author.bot &&
-						msg.attachments.size > 0 &&
+						(msg.attachments.size > 0 ||
+							(msg.messageSnapshots.size > 0 &&
+								(msg.messageSnapshots.first()?.attachments?.size ?? 0) > 0)) &&
 						msg.createdTimestamp <= newerTimestamp
 					);
 				});
@@ -306,8 +324,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 				for (const msg of validMessages.values()) {
 					try {
+						const forwardedAttachments = msg.messageSnapshots.size
+							? Array.from(msg.messageSnapshots.values()).flatMap((snapshot) =>
+									Array.from(snapshot.attachments.values()),
+								)
+							: [];
 						const res = await uploadPhotos(
-							Array.from(msg.attachments.values()),
+							Array.from(msg.attachments.values()).concat(forwardedAttachments),
 							albumId,
 							{
 								uploaderName: msg.author.username,
