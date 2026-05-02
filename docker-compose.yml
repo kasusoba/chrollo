@@ -1,0 +1,16 @@
+services:
+  chrollo:
+    build: .
+    restart: unless-stopped
+    ports:
+      # OAuth2 callback server — update GOOGLE_REDIRECT_URI in .env to match
+      # e.g. http://<your-machine-ip>:3000/auth/callback
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # Persists Google OAuth tokens across restarts.
+      # Run `touch tokens.json` first if the file doesn't exist yet.
+      - ./tokens.json:/app/tokens.json
+      # Persists album data
+      - ./album.json:/app/album.json
