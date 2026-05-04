@@ -5,7 +5,7 @@ services:
     ports:
       # OAuth2 callback server — update GOOGLE_REDIRECT_URI in .env to match
       # e.g. http://<your-machine-ip>:3000/auth/callback
-      - "3000:3000"
+      - "5000:3000"
     env_file:
       - .env
     volumes:
