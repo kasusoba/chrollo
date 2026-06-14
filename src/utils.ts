@@ -7,9 +7,9 @@ import type { Attachment } from "discord.js";
 import { exiftool } from "exiftool-vendored";
 import { oauth2Client } from "./googleClient.js";
 
-export const eiBotTestChannelId = "1450051502348439684";
-export const omoideChannelId = "1046093481774424184";
-export const botbgmChannelId = "694798318328610886";
+// The single server + channel the bot operates on (auto-uploads photos from).
+export const OPERATING_GUILD_ID = "324920310459793410"; // dmc
+export const OPERATING_CHANNEL_ID = "1046093481774424184"; // omoide
 
 const ALBUM_FILE_NAME = "album.json";
 
@@ -54,6 +54,53 @@ export interface SearchMediaItemsResponse {
 // --- ERROR HANDLING HELPERS ---
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Builds the URL a user visits to (re-)authenticate the bot with Google.
+ * Derived from GOOGLE_REDIRECT_URI (".../auth/callback" -> ".../auth").
+ */
+export function getAuthUrl(): string {
+	const redirect = process.env.GOOGLE_REDIRECT_URI;
+	if (redirect?.endsWith("/callback")) {
+		return redirect.slice(0, -"/callback".length);
+	}
+	return "http://localhost:3000/auth";
+}
+
+/**
+ * True when an error means the Google credentials are dead and the bot needs
+ * to be re-authenticated (expired/revoked refresh token, or a 401).
+ */
+// biome-ignore lint/suspicious/noExplicitAny: error shape is untyped
+export function isAuthError(error: any): boolean {
+	const status = error?.response?.status;
+	const googleError = error?.response?.data?.error;
+	return (
+		status === 401 ||
+		googleError === "invalid_grant" ||
+		googleError === "unauthorized_client"
+	);
+}
+
+/**
+ * Lightweight liveness check for the Google credentials. Forces a token refresh
+ * if the access token is stale. Returns false only when the bot genuinely needs
+ * to be re-authenticated — transient network/5xx errors are treated as healthy.
+ */
+export async function isGoogleAuthHealthy(): Promise<boolean> {
+	if (!oauth2Client.credentials?.refresh_token) {
+		return false;
+	}
+	try {
+		await oauth2Client.request({
+			url: "https://photoslibrary.googleapis.com/v1/albums?pageSize=1",
+			method: "GET",
+		});
+		return true;
+	} catch (error) {
+		return !isAuthError(error);
+	}
+}
 
 /**
  * Wraps an API request with retry logic based on Google Cloud API recommendations.
@@ -141,7 +188,12 @@ export async function getValidatedAlbum() {
 		);
 
 		return album;
-	} catch (_error) {
+	} catch (error) {
+		if (isAuthError(error)) {
+			throw new Error(
+				`Bot needs to re-authenticate with Google. Log in here: ${getAuthUrl()}`,
+			);
+		}
 		throw new Error(
 			"The selected album does not exist on Google Photos. Please select a valid album using /album.",
 		);

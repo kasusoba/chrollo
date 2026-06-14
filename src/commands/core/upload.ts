@@ -2,14 +2,21 @@ import {
 	type ChatInputCommandInteraction,
 	Colors,
 	EmbedBuilder,
+	InteractionContextType,
 	MessageFlags,
 	SlashCommandBuilder,
 } from "discord.js";
-import { type Album, getValidatedAlbum, uploadPhotos } from "../../utils.js";
+import {
+	type Album,
+	getValidatedAlbum,
+	OPERATING_CHANNEL_ID,
+	uploadPhotos,
+} from "../../utils.js";
 
 export const data = new SlashCommandBuilder()
 	.setName("upload")
 	.setDescription("Upload existing photos in a channel.")
+	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM])
 	.addSubcommand((subcommand) =>
 		subcommand
 			.setName("id")
@@ -68,6 +75,17 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	}
 	const albumId = album.id;
 
+	// Always operate on the omoide channel, even when invoked from a DM.
+	const targetChannel =
+		await interaction.client.channels.fetch(OPERATING_CHANNEL_ID);
+	if (!targetChannel || !targetChannel.isTextBased()) {
+		await interaction.reply({
+			content: "Could not access the omoide channel.",
+			flags: MessageFlags.Ephemeral,
+		});
+		return;
+	}
+
 	await interaction.deferReply({
 		flags: MessageFlags.Ephemeral,
 	});
@@ -101,7 +119,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			try {
 				await updateProgress("Fetching message...");
 				const messageId = interaction.options.getString("message_id", true);
-				const message = await interaction.channel?.messages.fetch(messageId);
+				const message = await targetChannel.messages.fetch(messageId);
 
 				if (!message) {
 					await interaction.editReply({
@@ -158,7 +176,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 		case "until": {
 			const messageId = interaction.options.getString("message_id", true);
 			const selectedMessage =
-				await interaction.channel?.messages.fetch(messageId);
+				await targetChannel.messages.fetch(messageId);
 
 			if (!selectedMessage) {
 				await interaction.editReply(
@@ -173,7 +191,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			let messageIdPointer = messageId;
 
 			while (true) {
-				const messages = await interaction.channel?.messages.fetch({
+				const messages = await targetChannel.messages.fetch({
 					after: messageIdPointer,
 					limit: MAX_ALLOWED_MESSAGES_FETCH,
 				});
@@ -264,9 +282,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			await updateProgress("Locating start/end messages...");
 
 			const startMessage =
-				await interaction.channel?.messages.fetch(startMessageId);
+				await targetChannel.messages.fetch(startMessageId);
 			const endMessage =
-				await interaction.channel?.messages.fetch(endMessageId);
+				await targetChannel.messages.fetch(endMessageId);
 
 			if (!startMessage || !endMessage) {
 				await interaction.editReply(
@@ -297,7 +315,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			await updateProgress("Starting range scan...");
 
 			while (!finished) {
-				const messages = await interaction.channel?.messages.fetch({
+				const messages = await targetChannel.messages.fetch({
 					after: messageIdPointer,
 					limit: MAX_ALLOWED_MESSAGES_FETCH,
 				});
