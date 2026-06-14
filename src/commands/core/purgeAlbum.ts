@@ -4,6 +4,7 @@ import {
 	ButtonStyle,
 	type ChatInputCommandInteraction,
 	ComponentType,
+	InteractionContextType,
 	MessageFlags,
 	SlashCommandBuilder,
 } from "discord.js";
@@ -18,7 +19,8 @@ export const data = new SlashCommandBuilder()
 	.setName("purgealbum")
 	.setDescription(
 		"Delete ALL app-created media from the currently selected album.",
-	);
+	)
+	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM]);
 
 export async function execute(interaction: ChatInputCommandInteraction) {
 	// 1. Validation and Setup

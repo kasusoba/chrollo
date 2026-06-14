@@ -2,10 +2,10 @@ import { Events, type Message } from "discord.js";
 import { oauth2Client } from "../googleClient.js";
 import {
 	type Album,
-	botbgmChannelId,
-	eiBotTestChannelId,
+	getAuthUrl,
 	getValidatedAlbum,
-	omoideChannelId,
+	OPERATING_CHANNEL_ID,
+	OPERATING_GUILD_ID,
 	uploadPhotos,
 } from "../utils.js";
 
@@ -14,18 +14,20 @@ export default {
 	async execute(message: Message) {
 		if (message.author.bot) return;
 		if (
-			message.channelId !== omoideChannelId &&
-			message.channelId !== botbgmChannelId &&
-			message.channelId !== eiBotTestChannelId
+			message.guildId !== OPERATING_GUILD_ID ||
+			message.channelId !== OPERATING_CHANNEL_ID
 		)
 			return;
 
-		if (!oauth2Client.credentials || !oauth2Client.credentials.refresh_token) {
-			console.log("Not logged in yet");
-			return;
-		}
 		if (message.attachments.size === 0 && message.messageSnapshots.size === 0)
 			return;
+
+		if (!oauth2Client.credentials || !oauth2Client.credentials.refresh_token) {
+			message.reply(
+				`Bot isn't connected to Google yet. Log in here: ${getAuthUrl()}`,
+			);
+			return;
+		}
 
 		try {
 			let album: Album;

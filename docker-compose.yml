@@ -3,9 +3,9 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      # OAuth2 callback server — update GOOGLE_REDIRECT_URI in .env to match
-      # e.g. http://<your-machine-ip>:3000/auth/callback
-      - "5000:3000"
+      # OAuth2 callback server. Set PORT in .env (defaults to 3000) and update
+      # GOOGLE_REDIRECT_URI to match, e.g. http://<your-machine-ip>:5000/auth/callback
+      - "${PORT:-3000}:${PORT:-3000}"
     env_file:
       - .env
     volumes:

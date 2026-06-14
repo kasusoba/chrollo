@@ -4,6 +4,7 @@ import {
 	ButtonBuilder,
 	ButtonStyle,
 	type ChatInputCommandInteraction,
+	InteractionContextType,
 	LabelBuilder,
 	MessageFlags,
 	ModalBuilder,
@@ -36,7 +37,8 @@ function saveAlbumFile(albumObject: { id: string; title: string }) {
 
 export const data = new SlashCommandBuilder()
 	.setName("album")
-	.setDescription("Manage albums.");
+	.setDescription("Manage albums.")
+	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM]);
 
 export async function execute(interaction: ChatInputCommandInteraction) {
 	const getResponse = await oauth2Client.request<GetAlbumsResponse>({
