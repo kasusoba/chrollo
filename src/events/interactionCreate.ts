@@ -67,16 +67,23 @@ export default {
 		} catch (error) {
 			console.error(error);
 
-			if (interaction.replied || interaction.deferred) {
-				await interaction.followUp({
-					content: "there was error execute command",
-					flags: MessageFlags.Ephemeral,
-				});
-			} else {
-				await interaction.reply({
-					content: "error execute command",
-					flags: MessageFlags.Ephemeral,
-				});
+			// Notifying the user can itself fail (e.g. the interaction already
+			// expired — 10062). Swallow that so it doesn't crash the client via
+			// an unhandled 'error' event.
+			try {
+				if (interaction.replied || interaction.deferred) {
+					await interaction.followUp({
+						content: "there was error execute command",
+						flags: MessageFlags.Ephemeral,
+					});
+				} else {
+					await interaction.reply({
+						content: "error execute command",
+						flags: MessageFlags.Ephemeral,
+					});
+				}
+			} catch (replyError) {
+				console.error("Failed to notify user of command error:", replyError);
 			}
 		}
 	},

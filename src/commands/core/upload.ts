@@ -63,13 +63,19 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	const MAX_ALLOWED_MESSAGES_FETCH = 100;
 	const subcommand = interaction.options.getSubcommand();
 
+	// Acknowledge the interaction first. Album validation and the channel fetch
+	// below hit the network (and may retry for several seconds), which can blow
+	// past Discord's ~3s response window and invalidate the interaction (10062).
+	await interaction.deferReply({
+		flags: MessageFlags.Ephemeral,
+	});
+
 	let album: Album;
 	try {
 		album = await getValidatedAlbum();
 	} catch (error) {
-		await interaction.reply({
+		await interaction.editReply({
 			content: error instanceof Error ? error.message : "Album error",
-			ephemeral: true,
 		});
 		return;
 	}
@@ -79,16 +85,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	const targetChannel =
 		await interaction.client.channels.fetch(OPERATING_CHANNEL_ID);
 	if (!targetChannel || !targetChannel.isTextBased()) {
-		await interaction.reply({
+		await interaction.editReply({
 			content: "Could not access the omoide channel.",
-			flags: MessageFlags.Ephemeral,
 		});
 		return;
 	}
-
-	await interaction.deferReply({
-		flags: MessageFlags.Ephemeral,
-	});
 
 	let totalUploaded = 0;
 	let totalScanned = 0;
@@ -129,19 +130,25 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 					return;
 				}
 
-				if (message.author.bot || message.attachments.size === 0) {
+				// Forwarded messages carry their attachments in messageSnapshots,
+				// not in message.attachments — account for both before bailing.
+				const forwardedAttachments = message.messageSnapshots.size
+					? Array.from(message.messageSnapshots.values()).flatMap((snapshot) =>
+							Array.from(snapshot.attachments.values()),
+						)
+					: [];
+
+				if (
+					message.author.bot ||
+					(message.attachments.size === 0 &&
+						forwardedAttachments.length === 0)
+				) {
 					await interaction.editReply({
 						content: `❌ Message ${messageId} is either from a bot or has no attachments.`,
 						embeds: [],
 					});
 					return;
 				}
-
-				const forwardedAttachments = message.messageSnapshots.size
-					? Array.from(message.messageSnapshots.values()).flatMap((snapshot) =>
-							Array.from(snapshot.attachments.values()),
-						)
-					: [];
 
 				await updateProgress("Uploading photo...");
 				const uploadResponse = await uploadPhotos(
