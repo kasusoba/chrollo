@@ -1,4 +1,4 @@
-import { Events, type Message } from "discord.js";
+import { Events, type Message, MessageFlags } from "discord.js";
 import { oauth2Client } from "../googleClient.js";
 import {
 	type Album,
@@ -57,9 +57,13 @@ export default {
 					uploadTimestamp: message.createdTimestamp,
 				},
 			);
-			message.reply(
-				`Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album?.title}**!`,
-			);
+			// Routine confirmation fires on every photo, so keep it quiet (like a
+			// leaderboard bot): no push notification and no reply ping.
+			message.reply({
+				content: `Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album?.title}**!`,
+				flags: MessageFlags.SuppressNotifications,
+				allowedMentions: { repliedUser: false },
+			});
 		} catch (error) {
 			console.error("Error uploading photos:", error);
 			message.reply(error instanceof Error ? error.message : "Unknown error");
