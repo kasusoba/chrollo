@@ -1,17 +1,26 @@
 import {
 	type ChatInputCommandInteraction,
+	type Collection,
 	Colors,
 	EmbedBuilder,
 	InteractionContextType,
+	type Message,
 	MessageFlags,
+	type SendableChannels,
 	SlashCommandBuilder,
+	type TextBasedChannel,
 } from "discord.js";
 import {
 	type Album,
+	getMessageAttachments,
+	getUploadedMessageIdsInAlbum,
 	getValidatedAlbum,
+	hasUploadableAttachments,
 	OPERATING_CHANNEL_ID,
 	uploadPhotos,
 } from "../../utils.js";
+
+const MAX_ALLOWED_MESSAGES_FETCH = 100;
 
 export const data = new SlashCommandBuilder()
 	.setName("upload")
@@ -60,7 +69,6 @@ export const data = new SlashCommandBuilder()
 	);
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-	const MAX_ALLOWED_MESSAGES_FETCH = 100;
 	const subcommand = interaction.options.getSubcommand();
 
 	// Acknowledge the interaction first. Album validation and the channel fetch
@@ -84,15 +92,26 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	// Always operate on the omoide channel, even when invoked from a DM.
 	const targetChannel =
 		await interaction.client.channels.fetch(OPERATING_CHANNEL_ID);
-	if (!targetChannel || !targetChannel.isTextBased()) {
+	if (
+		!targetChannel ||
+		!targetChannel.isTextBased() ||
+		!targetChannel.isSendable()
+	) {
 		await interaction.editReply({
 			content: "Could not access the omoide channel.",
 		});
 		return;
 	}
 
+	// Explicit annotation: narrowing from the guard above is lost inside the nested closures below.
+	const channel: TextBasedChannel & SendableChannels = targetChannel;
+
+	// The album is the dedup source of truth since it's shared across every machine the bot runs on.
+	const uploadedMessageIds = await getUploadedMessageIdsInAlbum(albumId);
+
 	let totalUploaded = 0;
 	let totalScanned = 0;
+	let totalSkipped = 0;
 	let lastUpdateTimestamp = 0;
 
 	const updateProgress = async (status: string, force = false) => {
@@ -115,12 +134,60 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 		await interaction.editReply({ content: "", embeds: [embed] });
 	};
 
+	const uploadMessagePhotos = (message: Message) =>
+		uploadPhotos(getMessageAttachments(message), albumId, {
+			uploaderName: message.author.username,
+			uploaderDisplayName:
+				message.author.displayName || message.author.username,
+			uploadTimestamp: message.createdTimestamp,
+			messageId: message.id,
+		});
+
+	const postCompletion = async (embed: EmbedBuilder) => {
+		await channel.send({ embeds: [embed] });
+		await interaction.editReply({
+			content: "✅ Done, posted to the channel.",
+			embeds: [],
+		});
+	};
+
+	// Paginates forward from `anchor` (inclusive); stops after yielding the batch `shouldStop` flags.
+	async function* fetchMessageBatches(
+		anchor: Message,
+		shouldStop?: (messages: Collection<string, Message>) => boolean,
+	) {
+		let i = 0;
+		let pointer = anchor.id;
+
+		while (true) {
+			const messages = await channel.messages.fetch({
+				after: pointer,
+				limit: MAX_ALLOWED_MESSAGES_FETCH,
+			});
+
+			if (!messages || messages.size === 0) return;
+
+			// If it's the very first loop, include the anchor message manually.
+			if (i === 0) {
+				messages.set(anchor.id, anchor);
+			}
+
+			yield messages;
+
+			const newestMessageInBatch = messages.first();
+			if (!newestMessageInBatch || shouldStop?.(messages)) return;
+
+			pointer = newestMessageInBatch.id;
+			i += 1;
+		}
+	}
+
 	switch (subcommand) {
 		case "id": {
 			try {
 				await updateProgress("Fetching message...");
 				const messageId = interaction.options.getString("message_id", true);
-				const message = await targetChannel.messages.fetch(messageId);
+				const message = await channel.messages.fetch(messageId);
 
 				if (!message) {
 					await interaction.editReply({
@@ -130,19 +197,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 					return;
 				}
 
-				// Forwarded messages carry their attachments in messageSnapshots,
-				// not in message.attachments — account for both before bailing.
-				const forwardedAttachments = message.messageSnapshots.size
-					? Array.from(message.messageSnapshots.values()).flatMap((snapshot) =>
-							Array.from(snapshot.attachments.values()),
-						)
-					: [];
-
-				if (
-					message.author.bot ||
-					(message.attachments.size === 0 &&
-						forwardedAttachments.length === 0)
-				) {
+				if (!hasUploadableAttachments(message)) {
 					await interaction.editReply({
 						content: `❌ Message ${messageId} is either from a bot or has no attachments.`,
 						embeds: [],
@@ -150,17 +205,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 					return;
 				}
 
+				if (uploadedMessageIds.has(message.id)) {
+					await interaction.editReply({
+						content: `⏭️ Message ${messageId} is already in **${album.title}**, skipping.`,
+						embeds: [],
+					});
+					return;
+				}
+
 				await updateProgress("Uploading photo...");
-				const uploadResponse = await uploadPhotos(
-					Array.from(message.attachments.values()).concat(forwardedAttachments),
-					albumId,
-					{
-						uploaderName: message.author.username,
-						uploaderDisplayName:
-							message.author.displayName || message.author.username,
-						uploadTimestamp: message.createdTimestamp,
-					},
-				);
+				const uploadResponse = await uploadMessagePhotos(message);
 
 				const successEmbed = new EmbedBuilder()
 					.setTitle("✅ Upload Complete")
@@ -169,7 +223,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 						`Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album.title}**!`,
 					);
 
-				await interaction.editReply({ content: "", embeds: [successEmbed] });
+				await postCompletion(successEmbed);
 			} catch (error) {
 				console.error("Error uploading photos:", error);
 				await interaction.editReply(
@@ -182,8 +236,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 		case "until": {
 			const messageId = interaction.options.getString("message_id", true);
-			const selectedMessage =
-				await targetChannel.messages.fetch(messageId);
+			const selectedMessage = await channel.messages.fetch(messageId);
 
 			if (!selectedMessage) {
 				await interaction.editReply(
@@ -194,56 +247,23 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 			await updateProgress("Starting batch process...");
 
-			let i = 0;
-			let messageIdPointer = messageId;
-
-			while (true) {
-				const messages = await targetChannel.messages.fetch({
-					after: messageIdPointer,
-					limit: MAX_ALLOWED_MESSAGES_FETCH,
-				});
-
-				if (!messages || messages.size === 0) {
-					break;
-				}
-
-				// If it's the very first loop, include the starting message manually
-				if (i === 0) {
-					messages.set(selectedMessage.id, selectedMessage);
-				}
-
+			for await (const messages of fetchMessageBatches(selectedMessage)) {
 				totalScanned += messages.size;
 
 				await updateProgress("🔍 Scanning messages and uploading...");
 
 				const messagesWithAttachments = messages.filter(
-					(msg) =>
-						!msg.author.bot &&
-						(msg.attachments.size > 0 ||
-							(msg.messageSnapshots.size > 0 &&
-								(msg.messageSnapshots.first()?.attachments?.size ?? 0) > 0)),
+					hasUploadableAttachments,
 				);
 
-				for (const msg of messagesWithAttachments.values()) {
-					const attachmentsToUpload = Array.from(msg.attachments.values());
-					const forwardedAttachments = msg.messageSnapshots.size
-						? Array.from(msg.messageSnapshots.values()).flatMap((snapshot) =>
-								Array.from(snapshot.attachments.values()),
-							)
-						: [];
-					attachmentsToUpload.push(...forwardedAttachments);
+				const newMessages = messagesWithAttachments.filter(
+					(msg) => !uploadedMessageIds.has(msg.id),
+				);
+				totalSkipped += messagesWithAttachments.size - newMessages.size;
 
+				for (const msg of newMessages.values()) {
 					try {
-						const uploadResponse = await uploadPhotos(
-							attachmentsToUpload,
-							albumId,
-							{
-								uploaderName: msg.author.username,
-								uploaderDisplayName:
-									msg.author.displayName || msg.author.username,
-								uploadTimestamp: msg.createdTimestamp,
-							},
-						);
+						const uploadResponse = await uploadMessagePhotos(msg);
 						totalUploaded += uploadResponse.numOfUploaded;
 
 						await updateProgress("🚀 Uploading found images...");
@@ -255,12 +275,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 					}
 				}
 
-				const newestMessageInBatch = messages.first();
-				if (!newestMessageInBatch) break;
-				messageIdPointer = newestMessageInBatch.id;
-
 				await updateProgress("🔍 Scanning next batch...");
-				i += 1;
 			}
 
 			const doneEmbed = new EmbedBuilder()
@@ -270,9 +285,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 				.addFields(
 					{ name: "Total Scanned", value: `${totalScanned}`, inline: true },
 					{ name: "Total Uploaded", value: `${totalUploaded}`, inline: true },
+					{
+						name: "Already Uploaded (skipped)",
+						value: `${totalSkipped}`,
+						inline: true,
+					},
 				);
 
-			await interaction.editReply({ content: "", embeds: [doneEmbed] });
+			await postCompletion(doneEmbed);
 			break;
 		}
 
@@ -288,10 +308,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 			await updateProgress("Locating start/end messages...");
 
-			const startMessage =
-				await targetChannel.messages.fetch(startMessageId);
-			const endMessage =
-				await targetChannel.messages.fetch(endMessageId);
+			const startMessage = await channel.messages.fetch(startMessageId);
+			const endMessage = await channel.messages.fetch(endMessageId);
 
 			if (!startMessage || !endMessage) {
 				await interaction.editReply(
@@ -312,76 +330,42 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 				olderMessage = startMessage;
 			}
 
-			const olderMessageId = olderMessage.id;
 			const newerTimestamp = newerMessage.createdTimestamp;
-
-			let i = 0;
-			let messageIdPointer = olderMessageId;
-			let finished = false;
+			const reachedEnd = (messages: Collection<string, Message>) =>
+				(messages.first()?.createdTimestamp ?? 0) >= newerTimestamp;
 
 			await updateProgress("Starting range scan...");
 
-			while (!finished) {
-				const messages = await targetChannel.messages.fetch({
-					after: messageIdPointer,
-					limit: MAX_ALLOWED_MESSAGES_FETCH,
-				});
+			for await (const messages of fetchMessageBatches(
+				olderMessage,
+				reachedEnd,
+			)) {
+				totalScanned += messages.size;
 
-				if (!messages || messages.size === 0) {
-					break;
-				}
+				const validMessages = messages.filter(
+					(msg) =>
+						hasUploadableAttachments(msg) &&
+						msg.createdTimestamp <= newerTimestamp,
+				);
 
-				if (i === 0) {
-					messages.set(olderMessage.id, olderMessage);
-				}
-
-				const validMessages = messages.filter((msg) => {
-					return (
-						!msg.author.bot &&
-						(msg.attachments.size > 0 ||
-							(msg.messageSnapshots.size > 0 &&
-								(msg.messageSnapshots.first()?.attachments?.size ?? 0) > 0)) &&
-						msg.createdTimestamp <= newerTimestamp
-					);
-				});
+				const newMessages = validMessages.filter(
+					(msg) => !uploadedMessageIds.has(msg.id),
+				);
+				totalSkipped += validMessages.size - newMessages.size;
 
 				await updateProgress("🔍 Scanning messages and uploading...");
 
-				for (const msg of validMessages.values()) {
+				for (const msg of newMessages.values()) {
 					try {
-						const forwardedAttachments = msg.messageSnapshots.size
-							? Array.from(msg.messageSnapshots.values()).flatMap((snapshot) =>
-									Array.from(snapshot.attachments.values()),
-								)
-							: [];
-						const res = await uploadPhotos(
-							Array.from(msg.attachments.values()).concat(forwardedAttachments),
-							albumId,
-							{
-								uploaderName: msg.author.username,
-								uploaderDisplayName:
-									msg.author.displayName || msg.author.username,
-								uploadTimestamp: msg.createdTimestamp,
-							},
-						);
-						totalUploaded += res.numOfUploaded;
+						const uploadResponse = await uploadMessagePhotos(msg);
+						totalUploaded += uploadResponse.numOfUploaded;
 						await updateProgress("🚀 Uploading in range...");
 					} catch (error) {
 						console.error(`Error uploading msg ${msg.id}:`, error);
 					}
 				}
 
-				const newestMessageInBatch = messages.first();
-				if (!newestMessageInBatch) break;
-
-				if (newestMessageInBatch.createdTimestamp >= newerTimestamp) {
-					finished = true;
-				} else {
-					messageIdPointer = newestMessageInBatch.id;
-				}
-
 				await updateProgress("🔍 Scanning next batch...");
-				i += 1;
 			}
 
 			const rangeDoneEmbed = new EmbedBuilder()
@@ -391,9 +375,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 				.addFields(
 					{ name: "Messages Scanned", value: `${totalScanned}`, inline: true },
 					{ name: "Photos Uploaded", value: `${totalUploaded}`, inline: true },
+					{
+						name: "Already Uploaded (skipped)",
+						value: `${totalSkipped}`,
+						inline: true,
+					},
 				);
 
-			await interaction.editReply({ content: "", embeds: [rangeDoneEmbed] });
+			await postCompletion(rangeDoneEmbed);
 
 			break;
 		}

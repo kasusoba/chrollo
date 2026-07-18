@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { Attachment } from "discord.js";
+import type { Attachment, Message } from "discord.js";
 import { exiftool } from "exiftool-vendored";
 import { oauth2Client } from "./googleClient.js";
 
@@ -44,11 +44,37 @@ export interface UploadOptions {
 	uploaderName: string;
 	uploaderDisplayName: string;
 	uploadTimestamp: number;
+	messageId: string;
 }
 
 export interface SearchMediaItemsResponse {
-	mediaItems?: { id: string }[];
+	mediaItems?: { id: string; description?: string }[];
 	nextPageToken?: string;
+}
+
+// Tags descriptions with "| msg:123" so the album (shared across machines) can answer dedup checks.
+const MESSAGE_ID_TAG_PATTERN = /\|\s*msg:(\d+)\s*$/;
+
+function tagDescriptionWithMessageId(
+	description: string,
+	messageId: string,
+): string {
+	return `${description} | msg:${messageId}`;
+}
+
+// Forwarded messages carry attachments in messageSnapshots, not message.attachments.
+export function getMessageAttachments(message: Message): Attachment[] {
+	const own = Array.from(message.attachments.values());
+	const forwarded = message.messageSnapshots.size
+		? Array.from(message.messageSnapshots.values()).flatMap((snapshot) =>
+				Array.from(snapshot.attachments.values()),
+			)
+		: [];
+	return own.concat(forwarded);
+}
+
+export function hasUploadableAttachments(message: Message): boolean {
+	return !message.author.bot && getMessageAttachments(message).length > 0;
 }
 
 // --- ERROR HANDLING HELPERS ---
@@ -363,6 +389,42 @@ export async function getAllMediaItemsInAlbum(
 	return mediaItemIds;
 }
 
+export async function getUploadedMessageIdsInAlbum(
+	albumId: string,
+): Promise<Set<string>> {
+	const messageIds = new Set<string>();
+	let nextPageToken: string | undefined;
+
+	do {
+		// eslint-disable-next-line no-await-in-loop
+		const response = await requestWithRetry(
+			() =>
+				oauth2Client.request<SearchMediaItemsResponse>({
+					url: "https://photoslibrary.googleapis.com/v1/mediaItems:search",
+					method: "POST",
+					data: {
+						albumId: albumId,
+						pageSize: "100",
+						pageToken: nextPageToken,
+					},
+				}),
+			"Search Media Items (dedup)",
+		);
+
+		for (const item of response.data.mediaItems ?? []) {
+			const match = item.description?.match(MESSAGE_ID_TAG_PATTERN);
+			const messageId = match?.[1];
+			if (messageId) {
+				messageIds.add(messageId);
+			}
+		}
+
+		nextPageToken = response.data.nextPageToken;
+	} while (nextPageToken);
+
+	return messageIds;
+}
+
 /**
  * Removes media items from an album in batches of 50 (API limit).
  */
@@ -445,7 +507,10 @@ export async function uploadPhotos(
 		throw new Error("No attachments to upload.");
 	}
 
-	const description = `Uploaded by: ${options.uploaderDisplayName} (${options.uploaderName})`;
+	const description = tagDescriptionWithMessageId(
+		`Uploaded by: ${options.uploaderDisplayName} (${options.uploaderName})`,
+		options.messageId,
+	);
 	const fallbackDate = new Date(options.uploadTimestamp);
 
 	// Execute uploads in parallel

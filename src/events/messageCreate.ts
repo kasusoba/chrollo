@@ -3,6 +3,7 @@ import { oauth2Client } from "../googleClient.js";
 import {
 	type Album,
 	getAuthUrl,
+	getMessageAttachments,
 	getValidatedAlbum,
 	OPERATING_CHANNEL_ID,
 	OPERATING_GUILD_ID,
@@ -39,14 +40,8 @@ export default {
 			}
 			const albumId = album.id;
 
-			const forwardedAttachments = message.messageSnapshots.size
-				? Array.from(message.messageSnapshots.values()).flatMap((snapshot) =>
-						Array.from(snapshot.attachments.values()),
-					)
-				: [];
-
 			const uploadResponse = await uploadPhotos(
-				Array.from(message.attachments.values()).concat(forwardedAttachments),
+				getMessageAttachments(message),
 				albumId,
 				{
 					uploaderName: message.author.username,
@@ -55,6 +50,7 @@ export default {
 						message.author.displayName ??
 						message.author.username,
 					uploadTimestamp: message.createdTimestamp,
+					messageId: message.id,
 				},
 			);
 			// Routine confirmation fires on every photo, so keep it quiet (like a
