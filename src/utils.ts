@@ -48,18 +48,39 @@ export interface UploadOptions {
 }
 
 export interface SearchMediaItemsResponse {
-	mediaItems?: { id: string; description?: string }[];
+	mediaItems?: {
+		id: string;
+		description?: string;
+		baseUrl?: string;
+		productUrl?: string;
+		mimeType?: string;
+		filename?: string;
+		mediaMetadata?: {
+			video?: {
+				durationMillis?: string;
+			};
+		};
+	}[];
 	nextPageToken?: string;
 }
 
-// Tags descriptions with "| msg:123" so the album (shared across machines) can answer dedup checks.
-const MESSAGE_ID_TAG_PATTERN = /\|\s*msg:(\d+)\s*$/;
+// Tags descriptions with "| msg:123" or "| msg:123,456" (the latter when the
+// exact same file was posted in more than one message) so the album (shared
+// across machines) can answer dedup checks.
+export const MESSAGE_ID_TAG_PATTERN = /\|\s*msg:([\d,]+)\s*$/;
 
 function tagDescriptionWithMessageId(
 	description: string,
 	messageId: string,
 ): string {
 	return `${description} | msg:${messageId}`;
+}
+
+export function tagDescriptionWithMessageIds(
+	description: string,
+	messageIds: string[],
+): string {
+	return `${description} | msg:${messageIds.join(",")}`;
 }
 
 // Forwarded messages carry attachments in messageSnapshots, not message.attachments.
@@ -134,7 +155,7 @@ export async function isGoogleAuthHealthy(): Promise<boolean> {
  * - 429: Wait 30s minimum
  * - Other 4xx: Fail immediately
  */
-async function requestWithRetry<T>(
+export async function requestWithRetry<T>(
 	requestFn: () => Promise<T>,
 	operationName = "API Request",
 ): Promise<T> {
@@ -413,9 +434,11 @@ export async function getUploadedMessageIdsInAlbum(
 
 		for (const item of response.data.mediaItems ?? []) {
 			const match = item.description?.match(MESSAGE_ID_TAG_PATTERN);
-			const messageId = match?.[1];
-			if (messageId) {
-				messageIds.add(messageId);
+			const idsList = match?.[1];
+			if (idsList) {
+				for (const id of idsList.split(",")) {
+					if (id) messageIds.add(id);
+				}
 			}
 		}
 
