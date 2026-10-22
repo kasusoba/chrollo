@@ -33,14 +33,30 @@ app.get("/", async (_req, res) => {
 	return res.send("kararanjut");
 });
 
+/**
+ * Opened via localhost (on the host itself or through an SSH tunnel)
+ * -> call back to localhost. Anything else -> GOOGLE_REDIRECT_URI.
+ * Both URIs must be listed in the Google Cloud OAuth client.
+ */
+function redirectUriFor(req: express.Request): string {
+	const localUri = `http://${req.get("host")}/auth/callback`;
+	if (req.hostname === "localhost" || req.hostname === "127.0.0.1") {
+		return localUri;
+	}
+	return process.env.GOOGLE_REDIRECT_URI ?? localUri;
+}
+
 app.get("/auth", async (req, res) => {
 	const oauthState = Buffer.from(
 		crypto.getRandomValues(new Uint8Array(32)),
 	).toString("hex");
 
+	const redirectUri = redirectUriFor(req);
 	req.session.oauthState = oauthState;
+	req.session.redirectUri = redirectUri;
 
 	const authUrl = oauth2Client.generateAuthUrl({
+		redirect_uri: redirectUri,
 		access_type: "offline",
 		scope: scopes,
 		state: oauthState,
@@ -69,7 +85,10 @@ app.get("/auth/callback", async (req, res) => {
 			return res.send("Error: No code provided");
 		}
 
-		const { tokens } = await oauth2Client.getToken(code);
+		const { tokens } = await oauth2Client.getToken({
+			code,
+			redirect_uri: req.session.redirectUri ?? redirectUriFor(req),
+		});
 		oauth2Client.setCredentials(tokens);
 
 		if (tokens.refresh_token || tokens.access_token) {

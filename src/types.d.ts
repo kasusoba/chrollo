@@ -12,5 +12,6 @@ declare module "discord.js" {
 declare module "express-session" {
 	interface SessionData {
 		oauthState?: string;
+		redirectUri?: string;
 	}
 }

@@ -3,9 +3,10 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      # OAuth2 callback server. Set PORT in .env (defaults to 3000) and update
-      # GOOGLE_REDIRECT_URI to match, e.g. http://<your-machine-ip>:5000/auth/callback
-      - "${PORT:-3000}:${PORT:-3000}"
+      # OAuth2 callback server, bound to this machine only. Reach it from other
+      # devices through a reverse proxy (e.g. Tailscale serve) or an SSH tunnel.
+      # Set PORT in .env (defaults to 3000).
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
     env_file:
       - .env
     volumes:
