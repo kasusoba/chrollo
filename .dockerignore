@@ -5,3 +5,4 @@ dist
 .gitignore
 *.md
 biome.json
+tmp

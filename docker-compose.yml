@@ -14,3 +14,6 @@ services:
       - ./tokens.json:/app/tokens.json
       # Persists album data
       - ./album.json:/app/album.json
+      # Temp space for media while it is processed (files are deleted after upload).
+      # Defaults to ./tmp. Set TMP_DIR in .env to use another disk, e.g. /mnt/hdd/chrollo-tmp
+      - ${TMP_DIR:-./tmp}:/tmp

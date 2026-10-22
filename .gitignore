@@ -4,3 +4,4 @@ config.json
 dist/
 tokens.json
 album.json
+tmp/
