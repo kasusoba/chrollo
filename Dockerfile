@@ -16,8 +16,9 @@ RUN pnpm build
 # ---- Runtime Stage ----
 FROM node:22-alpine AS runner
 
-# exiftool-vendored ships a Perl-based exiftool on Linux
-RUN apk add --no-cache perl
+# exiftool-vendored ships a Perl-based exiftool on Linux.
+# ffmpeg is used to fix video dates (src/utils.ts).
+RUN apk add --no-cache perl ffmpeg
 
 WORKDIR /app
 
