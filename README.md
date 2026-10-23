@@ -15,7 +15,13 @@ docker compose down            # stop
 
 The bot checks Google, auth and the selected album at boot and every 10 minutes (`HEALTH_CHECK_INTERVAL_MINUTES`). When something breaks or recovers, it DMs `DISCORD_OWNER_ID`. A failure is rechecked after a minute before the DM goes out, so short blips stay quiet.
 
-Run `/status` any time to see the current state and the last upload.
+Run `/status` any time to see the current state, the last upload and what is waiting.
+
+When something breaks, the alert DM has buttons for the fix: **Log in to Google**, **Recreate album** / **Choose album**, and **Check again**.
+
+### When an upload can't go through
+
+Members never have to post again. Photos that can't upload (Google down, login expired, album missing) are saved to `data/queue.json` and the message gets a ⏳. Once the health check sees everything working, they upload automatically, the bot's reply is edited and the ⏳ becomes ✅. The poster is only pinged when a file needs their action, e.g. a format Google Photos doesn't accept.
 
 After adding or changing slash commands, register them once:
 

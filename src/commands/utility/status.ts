@@ -1,9 +1,11 @@
 import {
+	type ButtonInteraction,
 	type ChatInputCommandInteraction,
 	InteractionContextType,
 	MessageFlags,
 	SlashCommandBuilder,
 } from "discord.js";
+import { getQueueSummary } from "../../autoUpload.js";
 import { type Check, getHealthState, runHealthCheck } from "../../health.js";
 import { getAuthUrl } from "../../utils.js";
 
@@ -19,7 +21,7 @@ const status = {
 		.setName("status")
 		.setDescription("Check if the bot is healthy: Google, auth, album.")
 		.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM]),
-	async execute(interaction: ChatInputCommandInteraction) {
+	async execute(interaction: ChatInputCommandInteraction | ButtonInteraction) {
 		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
 		const report = await runHealthCheck();
@@ -41,6 +43,12 @@ const status = {
 		) {
 			lines.push(
 				`Last upload failure: ${ago(lastUploadError.at)}: ${lastUploadError.error}`,
+			);
+		}
+		const queued = getQueueSummary();
+		if (queued.files && queued.oldest) {
+			lines.push(
+				`${"⏳"} Waiting to upload: ${queued.files} file(s) from ${queued.messages} message(s), oldest ${ago(queued.oldest)}`,
 			);
 		}
 		if (lastReport) {

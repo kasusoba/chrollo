@@ -1,15 +1,6 @@
-import { Events, type Message, MessageFlags } from "discord.js";
-import { oauth2Client } from "../googleClient.js";
-import { recordUploadFailure, recordUploadSuccess } from "../health.js";
-import {
-	type Album,
-	getAuthUrl,
-	getMessageAttachments,
-	getValidatedAlbum,
-	OPERATING_CHANNEL_ID,
-	OPERATING_GUILD_ID,
-	uploadPhotos,
-} from "../utils.js";
+import { Events, type Message } from "discord.js";
+import { autoUpload } from "../autoUpload.js";
+import { OPERATING_CHANNEL_ID, OPERATING_GUILD_ID } from "../utils.js";
 
 export default {
 	name: Events.MessageCreate,
@@ -24,51 +15,12 @@ export default {
 		if (message.attachments.size === 0 && message.messageSnapshots.size === 0)
 			return;
 
-		if (!oauth2Client.credentials || !oauth2Client.credentials.refresh_token) {
-			message.reply(
-				`Bot isn't connected to Google yet. Log in here: ${getAuthUrl()}`,
-			);
-			return;
-		}
-
 		try {
-			let album: Album;
-			try {
-				album = await getValidatedAlbum();
-			} catch (error) {
-				const text = error instanceof Error ? error.message : "Album error";
-				recordUploadFailure(text);
-				message.reply(text);
-				return;
-			}
-			const albumId = album.id;
-
-			const uploadResponse = await uploadPhotos(
-				getMessageAttachments(message),
-				albumId,
-				{
-					uploaderName: message.author.username,
-					uploaderDisplayName:
-						message.member?.displayName ??
-						message.author.displayName ??
-						message.author.username,
-					uploadTimestamp: message.createdTimestamp,
-					messageId: message.id,
-				},
-			);
-			recordUploadSuccess(uploadResponse.numOfUploaded);
-			// Routine confirmation fires on every photo, so keep it quiet (like a
-			// leaderboard bot): no push notification and no reply ping.
-			message.reply({
-				content: `Successfully uploaded **${uploadResponse.numOfUploaded}** images to Google Photos album **${album?.title}**!`,
-				flags: MessageFlags.SuppressNotifications,
-				allowedMentions: { repliedUser: false },
-			});
+			// Uploads, or queues the files and retries later if Google, the login
+			// or the album is broken. The owner gets a DM from the health check.
+			await autoUpload(message);
 		} catch (error) {
 			console.error("Error uploading photos:", error);
-			const text = error instanceof Error ? error.message : "Unknown error";
-			recordUploadFailure(text);
-			message.reply(text);
 		}
 	},
 };

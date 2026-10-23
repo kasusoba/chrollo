@@ -1,9 +1,21 @@
 import { Collection, Events, type Interaction, MessageFlags } from "discord.js";
+import { handleOwnerButton } from "../ownerActions.js";
 import { OPERATING_CHANNEL_ID, OPERATING_GUILD_ID } from "../utils.js";
 
 export default {
 	name: Events.InteractionCreate,
 	async execute(interaction: Interaction) {
+		// Buttons on the health alert DM. Other buttons belong to a command's
+		// own collector (e.g. /album) and are ignored here.
+		if (interaction.isButton()) {
+			try {
+				await handleOwnerButton(interaction);
+			} catch (error) {
+				console.error("Owner button failed:", error);
+			}
+			return;
+		}
+
 		if (!interaction.isChatInputCommand()) return;
 
 		// Only the owner may control the bot.

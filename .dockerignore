@@ -6,3 +6,4 @@ dist
 *.md
 biome.json
 tmp
+data

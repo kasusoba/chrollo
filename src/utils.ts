@@ -262,86 +262,175 @@ async function modifyVideoDate(
 	await execFileAsync("ffmpeg", args);
 }
 
+/** A file failed to upload. `retryable` means trying again later may work. */
+export class UploadFileError extends Error {
+	constructor(
+		message: string,
+		readonly retryable: boolean,
+	) {
+		super(message);
+	}
+}
+
+/**
+ * Short, readable reason for a failed request, e.g. "HTTP 400: Invalid album
+ * ID." or "ETIMEDOUT".
+ */
+// biome-ignore lint/suspicious/noExplicitAny: error shape is untyped
+export function describeError(error: any): string {
+	const status = error?.response?.status;
+	const googleMessage =
+		error?.response?.data?.error?.message ?? error?.response?.data?.error;
+	if (status) {
+		return typeof googleMessage === "string"
+			? `HTTP ${status}: ${googleMessage}`
+			: `HTTP ${status}`;
+	}
+	return error?.code ?? error?.message ?? "unknown error";
+}
+
+/** Google rejected the request itself (bad input), so retrying won't help. */
+// biome-ignore lint/suspicious/noExplicitAny: error shape is untyped
+function isPermanentRequestError(error: any): boolean {
+	const status = error?.response?.status;
+	return (
+		typeof status === "number" &&
+		status >= 400 &&
+		status < 500 &&
+		status !== 408 &&
+		status !== 429 &&
+		!isAuthError(error)
+	);
+}
+
+const MEDIA_EXTENSIONS = new Set([
+	".jpg",
+	".jpeg",
+	".png",
+	".gif",
+	".webp",
+	".heic",
+	".heif",
+	".avif",
+	".bmp",
+	".tif",
+	".tiff",
+	".ico",
+	".dng",
+	".raw",
+	".mp4",
+	".mov",
+	".mkv",
+	".avi",
+	".webm",
+	".m4v",
+	".3gp",
+	".3g2",
+	".mpg",
+	".mpeg",
+	".mts",
+	".m2ts",
+	".wmv",
+]);
+
+/** True for photos and videos, the only files Google Photos accepts. */
+export function isMediaAttachment(attachment: Attachment): boolean {
+	const type = attachment.contentType ?? "";
+	if (type.startsWith("image/") || type.startsWith("video/")) return true;
+	return MEDIA_EXTENSIONS.has(path.extname(attachment.name).toLowerCase());
+}
+
+/** Downloads, fixes the date, and uploads the bytes. Throws UploadFileError. */
 export async function uploadBytesToGooglePhotos(
 	attachment: Attachment,
 	fallbackDate: Date,
-): Promise<UploadItem | null> {
+): Promise<UploadItem> {
+	console.log(`Processing ${attachment.name}...`);
+
+	let arrayBuffer: ArrayBuffer;
 	try {
-		console.log(`Processing ${attachment.name}...`);
-
 		const response = await fetch(attachment.url);
-		const arrayBuffer = await response.arrayBuffer();
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}`);
+		}
+		arrayBuffer = await response.arrayBuffer();
+	} catch (error) {
+		// Retrying refetches the message, which also renews expired Discord links.
+		throw new UploadFileError(
+			`download from Discord failed (${describeError(error)})`,
+			true,
+		);
+	}
 
-		const tempDir = os.tmpdir();
-		const baseName = `${Date.now()}_${attachment.name}`;
-		const inputPath = path.join(tempDir, baseName);
-		const outputPath = path.join(tempDir, `processed_${baseName}`);
+	const tempDir = os.tmpdir();
+	const baseName = `${Date.now()}_${attachment.name}`;
+	const inputPath = path.join(tempDir, baseName);
+	const outputPath = path.join(tempDir, `processed_${baseName}`);
+	const cleanupFiles = [inputPath, outputPath, `${inputPath}_original`];
 
-		// List of files to delete later
-		const cleanupFiles = [inputPath, outputPath];
+	const ext = path.extname(attachment.name).toLowerCase();
+	const isVideo =
+		attachment.contentType?.startsWith("video/") ||
+		[".mp4", ".mov", ".mkv", ".avi", ".webm"].includes(ext);
 
-		// Determine File Type
-		const ext = path.extname(attachment.name).toLowerCase();
-		const isVideo = [".mp4", ".mov", ".mkv", ".avi", ".webm"].includes(ext);
+	let finalBuffer: Buffer = Buffer.from(arrayBuffer);
 
-		let finalBuffer: Buffer;
+	try {
+		await fs.promises.writeFile(inputPath, finalBuffer);
 
-		try {
-			// 1. Write the raw download to disk
-			await fs.promises.writeFile(inputPath, Buffer.from(arrayBuffer));
-
-			if (isVideo) {
-				// --- VIDEO STRATEGY: FFmpeg ---
-				console.log("> Type: Video. Using FFmpeg (Nuclear Option)...");
-				try {
-					await modifyVideoDate(inputPath, outputPath, fallbackDate);
-					// Read the NEW file created by FFmpeg
-					finalBuffer = await fs.promises.readFile(outputPath);
-				} catch (e) {
-					console.error("FFmpeg failed, falling back to original:", e);
-					finalBuffer = await fs.promises.readFile(inputPath);
-				}
-			} else {
-				// --- IMAGE STRATEGY: ExifTool ---
-				console.log("> Type: Image. Using ExifTool...");
-
-				// Read tags first to preserve existing dates (deduplication check)
+		// Date fixing is best effort: if it fails, upload the original file.
+		if (isVideo) {
+			console.log("> Type: Video. Using FFmpeg...");
+			try {
+				await modifyVideoDate(inputPath, outputPath, fallbackDate);
+				finalBuffer = await fs.promises.readFile(outputPath);
+			} catch (e) {
+				console.error("FFmpeg failed, uploading original:", e);
+			}
+		} else {
+			console.log("> Type: Image. Using ExifTool...");
+			try {
 				const tags = await exiftool.read(inputPath);
 				if (tags.DateTimeOriginal) {
 					console.log("> Existing EXIF found. Skipping modification.");
-					finalBuffer = await fs.promises.readFile(inputPath);
 				} else {
-					// Write tags
 					await exiftool.write(inputPath, {
 						DateTimeOriginal: fallbackDate.toISOString(),
 						CreateDate: fallbackDate.toISOString(),
 						ModifyDate: fallbackDate.toISOString(),
 						AllDates: fallbackDate.toISOString(),
 					});
-
-					cleanupFiles.push(`${inputPath}_original`); // Exiftool backup file
 					finalBuffer = await fs.promises.readFile(inputPath);
 				}
+			} catch (e) {
+				console.error("ExifTool failed, uploading original:", e);
 			}
-		} finally {
-			// Cleanup temp files (Non-blocking)
-			Promise.all(
-				cleanupFiles.map((f) => fs.promises.unlink(f).catch(() => {})),
-			);
 		}
+	} catch (error) {
+		throw new UploadFileError(
+			`couldn't process the file on the bot (${describeError(error)})`,
+			true,
+		);
+	} finally {
+		Promise.all(cleanupFiles.map((f) => fs.promises.unlink(f).catch(() => {})));
+	}
 
-		// Upload to Google Photos
-		const uploadResponse = await oauth2Client.request<string>({
-			url: "https://photoslibrary.googleapis.com/v1/uploads",
-			method: "POST",
-			headers: {
-				"Content-type": "application/octet-stream",
-				"X-Goog-Upload-Protocol": "raw",
-				"X-Goog-Upload-Content-Type":
-					attachment.contentType || "application/octet-stream",
-			},
-			data: finalBuffer,
-		});
+	try {
+		const uploadResponse = await requestWithRetry(
+			() =>
+				oauth2Client.request<string>({
+					url: "https://photoslibrary.googleapis.com/v1/uploads",
+					method: "POST",
+					headers: {
+						"Content-type": "application/octet-stream",
+						"X-Goog-Upload-Protocol": "raw",
+						"X-Goog-Upload-Content-Type":
+							attachment.contentType || "application/octet-stream",
+					},
+					data: finalBuffer,
+				}),
+			"Upload Bytes",
+		);
 
 		return {
 			simpleMediaItem: {
@@ -351,7 +440,10 @@ export async function uploadBytesToGooglePhotos(
 		};
 	} catch (error) {
 		console.error("Error uploading to Google Photos:", error);
-		return null;
+		throw new UploadFileError(
+			`Google Photos upload failed (${describeError(error)})`,
+			!isPermanentRequestError(error),
+		);
 	}
 }
 
@@ -484,35 +576,72 @@ export async function batchRemoveMediaItems(
 	return removedCount;
 }
 
-export async function batchCreatePhotos(items: UploadItem[], albumId?: string) {
-	try {
-		// Wrapped in retry logic
-		const createResponse = await requestWithRetry(
-			() =>
-				oauth2Client.request({
-					url: "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
-					method: "POST",
-					data: {
-						albumId: albumId ? albumId : undefined,
-						newMediaItems: items,
-					},
-				}),
-			"Batch Create Media",
-		);
-
-		console.log("Batch create success:", createResponse.data);
-	} catch (error) {
-		console.error("Error creating media items in Google Photos:", error);
-		// Note: If batchCreate fails partly, you might need deeper inspection of createResponse.data
-		// but for network errors, the retry handles it.
-	}
+interface BatchCreateResponse {
+	newMediaItemResults?: {
+		uploadToken: string;
+		status?: { code?: number; message?: string };
+	}[];
 }
 
+/**
+ * Adds uploaded bytes to the library (and album). Throws if the whole request
+ * fails. Returns an error message per upload token that Google rejected.
+ */
+export async function batchCreatePhotos(
+	items: UploadItem[],
+	albumId?: string,
+): Promise<Map<string, { message: string; retryable: boolean }>> {
+	const createResponse = await requestWithRetry(
+		() =>
+			oauth2Client.request<BatchCreateResponse>({
+				url: "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
+				method: "POST",
+				data: {
+					albumId: albumId ? albumId : undefined,
+					newMediaItems: items,
+				},
+			}),
+		"Batch Create Media",
+	);
+
+	console.log("Batch create success:", createResponse.data);
+
+	const rejected = new Map<string, { message: string; retryable: boolean }>();
+	for (const result of createResponse.data.newMediaItemResults ?? []) {
+		const code = result.status?.code ?? 0;
+		if (code !== 0) {
+			rejected.set(result.uploadToken, {
+				message: result.status?.message || `error code ${code}`,
+				// 3 = INVALID_ARGUMENT: Google won't take this file. Others may pass later.
+				retryable: code !== 3,
+			});
+		}
+	}
+	return rejected;
+}
+
+export interface FileFailure {
+	attachmentId: string;
+	name: string;
+	reason: string;
+	retryable: boolean;
+}
+
+export interface UploadResult {
+	numOfUploaded: number;
+	uploadedIds: string[];
+	failed: FileFailure[];
+}
+
+/**
+ * Uploads a message's attachments. Doesn't throw for failed files: each one is
+ * listed in `failed` with whether a later retry may work.
+ */
 export async function uploadPhotos(
 	attachments: Attachment[],
 	albumId: string,
 	options: UploadOptions,
-) {
+): Promise<UploadResult> {
 	if (attachments.length === 0) {
 		throw new Error("No attachments to upload.");
 	}
@@ -523,32 +652,62 @@ export async function uploadPhotos(
 	);
 	const fallbackDate = new Date(options.uploadTimestamp);
 
-	// Execute uploads in parallel
-	const uploadJobs = attachments.map((attachment) =>
-		uploadBytesToGooglePhotos(attachment, fallbackDate),
+	const failed: FileFailure[] = [];
+	const ready: { attachment: Attachment; item: UploadItem }[] = [];
+
+	const settled = await Promise.allSettled(
+		attachments.map((attachment) =>
+			uploadBytesToGooglePhotos(attachment, fallbackDate),
+		),
 	);
+	settled.forEach((outcome, i) => {
+		const attachment = attachments[i] as Attachment;
+		if (outcome.status === "fulfilled") {
+			ready.push({ attachment, item: { ...outcome.value, description } });
+		} else {
+			const error = outcome.reason;
+			failed.push({
+				attachmentId: attachment.id,
+				name: attachment.name,
+				reason: error instanceof Error ? error.message : String(error),
+				retryable: error instanceof UploadFileError ? error.retryable : true,
+			});
+		}
+	});
 
-	const uploadResults = await Promise.all(uploadJobs);
-	const successfulUploads = uploadResults
-		.filter((result): result is UploadItem => result !== null)
-		.map((item) => {
-			if (description) {
-				return { ...item, description };
+	const uploadedIds: string[] = [];
+	if (ready.length) {
+		try {
+			const rejected = await batchCreatePhotos(
+				ready.map((r) => r.item),
+				albumId,
+			);
+			for (const { attachment, item } of ready) {
+				const problem = rejected.get(item.simpleMediaItem.uploadToken);
+				if (problem) {
+					failed.push({
+						attachmentId: attachment.id,
+						name: attachment.name,
+						reason: `Google Photos rejected it (${problem.message})`,
+						retryable: problem.retryable,
+					});
+				} else {
+					uploadedIds.push(attachment.id);
+				}
 			}
-			return item;
-		});
-
-	if (successfulUploads.length === 0) {
-		throw new Error("No attachments to upload.");
+		} catch (error) {
+			console.error("Error creating media items in Google Photos:", error);
+			// Upload tokens expire, so a retry uploads the bytes again from scratch.
+			for (const { attachment } of ready) {
+				failed.push({
+					attachmentId: attachment.id,
+					name: attachment.name,
+					reason: `adding to the album failed (${describeError(error)})`,
+					retryable: true,
+				});
+			}
+		}
 	}
 
-	try {
-		await batchCreatePhotos(successfulUploads, albumId);
-		return {
-			numOfUploaded: successfulUploads.length,
-		};
-	} catch (error) {
-		console.error("Error creating media items in Google Photos:", error);
-		throw error;
-	}
+	return { numOfUploaded: uploadedIds.length, uploadedIds, failed };
 }

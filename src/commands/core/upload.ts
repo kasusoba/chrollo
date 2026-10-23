@@ -10,6 +10,7 @@ import {
 	SlashCommandBuilder,
 	type TextBasedChannel,
 } from "discord.js";
+import { removeFromQueue } from "../../autoUpload.js";
 import {
 	type Album,
 	getMessageAttachments,
@@ -134,14 +135,26 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 		await interaction.editReply({ content: "", embeds: [embed] });
 	};
 
-	const uploadMessagePhotos = (message: Message) =>
-		uploadPhotos(getMessageAttachments(message), albumId, {
+	const uploadMessagePhotos = async (message: Message) => {
+		const result = await uploadPhotos(getMessageAttachments(message), albumId, {
 			uploaderName: message.author.username,
 			uploaderDisplayName:
 				message.author.displayName || message.author.username,
 			uploadTimestamp: message.createdTimestamp,
 			messageId: message.id,
 		});
+		if (result.failed.length) {
+			console.error(`Failed files in message ${message.id}:`, result.failed);
+		}
+		if (result.numOfUploaded === 0) {
+			throw new Error(
+				`Nothing uploaded: ${result.failed.map((f) => `${f.name}: ${f.reason}`).join("; ")}`,
+			);
+		}
+		// Uploaded by hand, so the automatic retry must not upload it again.
+		removeFromQueue(message.id);
+		return result;
+	};
 
 	const postCompletion = async (embed: EmbedBuilder) => {
 		await channel.send({ embeds: [embed] });

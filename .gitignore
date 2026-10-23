@@ -5,3 +5,4 @@ dist/
 tokens.json
 album.json
 tmp/
+data/

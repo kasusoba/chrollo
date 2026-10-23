@@ -2,6 +2,7 @@ import fs from "node:fs";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
+	type ButtonInteraction,
 	ButtonStyle,
 	type ChatInputCommandInteraction,
 	InteractionContextType,
@@ -23,7 +24,7 @@ import {
 	getAlbum,
 } from "../../utils.js";
 
-function saveAlbumFile(albumObject: { id: string; title: string }) {
+export function saveAlbumFile(albumObject: { id: string; title: string }) {
 	if (fs.existsSync(ALBUM_PATH)) {
 		const currentData = JSON.parse(fs.readFileSync(ALBUM_PATH, "utf-8"));
 		const newData = { ...currentData, ...albumObject };
@@ -42,7 +43,24 @@ export const data = new SlashCommandBuilder()
 	.setDescription("Manage albums.")
 	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM]);
 
-export async function execute(interaction: ChatInputCommandInteraction) {
+/** Creates a Google Photos album and makes it the upload target. */
+export async function createAndSelectAlbum(
+	title: string,
+): Promise<GoogleAlbum> {
+	const createResponse = await oauth2Client.request<GoogleAlbum>({
+		url: "https://photoslibrary.googleapis.com/v1/albums",
+		method: "POST",
+		headers: { "Content-type": "application/json" },
+		data: { album: { title } },
+	});
+	console.log("Album creation success:", createResponse.data);
+	saveAlbumFile({ id: createResponse.data.id, title });
+	return createResponse.data;
+}
+
+export async function execute(
+	interaction: ChatInputCommandInteraction | ButtonInteraction,
+) {
 	const getResponse = await oauth2Client.request<GetAlbumsResponse>({
 		url: "https://photoslibrary.googleapis.com/v1/albums",
 		method: "GET",
@@ -138,19 +156,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 			await modalSubmission.deferUpdate();
 
-			const createResponse = await oauth2Client.request<GoogleAlbum>({
-				url: "https://photoslibrary.googleapis.com/v1/albums",
-				method: "POST",
-				headers: { "Content-type": "application/json" },
-				data: { album: { title: albumName } },
-			});
-
-			console.log("Album creation success:", createResponse.data);
-
-			saveAlbumFile({
-				id: createResponse.data.id,
-				title: albumName,
-			});
+			await createAndSelectAlbum(albumName);
 
 			await interaction.editReply({
 				content: `Album **${albumName}** created and selected successfully!`,

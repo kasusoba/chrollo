@@ -1,6 +1,12 @@
-import type { Client } from "discord.js";
+import {
+	ActionRowBuilder,
+	ButtonBuilder,
+	ButtonStyle,
+	type Client,
+} from "discord.js";
+import { getQueueSummary, retryQueued } from "./autoUpload.js";
 import { oauth2Client } from "./googleClient.js";
-import { getAlbum, getAuthUrl, isAuthError } from "./utils.js";
+import { describeError, getAlbum, getAuthUrl, isAuthError } from "./utils.js";
 
 // Background health monitor. Checks Google reachability, auth and the album on
 // a timer, and DMs the owner only when the overall state changes, so problems
@@ -40,6 +46,8 @@ let notifiedProblems: string | null = null;
 let pendingProblems: string | null = null;
 let timer: NodeJS.Timeout | null = null;
 let client: Client | null = null;
+let running = false;
+let rerun = false;
 
 export function recordUploadSuccess(count: number) {
 	lastUpload = { at: Date.now(), count };
@@ -51,19 +59,6 @@ export function recordUploadFailure(error: string) {
 
 export function getHealthState() {
 	return { lastReport, lastUpload, lastUploadError };
-}
-
-// biome-ignore lint/suspicious/noExplicitAny: error shape is untyped
-function describeError(error: any): string {
-	const status = error?.response?.status;
-	const googleMessage =
-		error?.response?.data?.error?.message ?? error?.response?.data?.error;
-	if (status) {
-		return typeof googleMessage === "string"
-			? `HTTP ${status}: ${googleMessage}`
-			: `HTTP ${status}`;
-	}
-	return error?.code ?? error?.message ?? "unknown error";
 }
 
 export async function runHealthCheck(): Promise<HealthReport> {
@@ -148,32 +143,106 @@ function problemsOf(report: HealthReport): string {
 	return problems.join("\n");
 }
 
-async function notifyOwner(text: string) {
+/** One-tap fixes for the owner, shown under the alert DM. */
+export function ownerActionRows(
+	report: HealthReport,
+): ActionRowBuilder<ButtonBuilder>[] {
+	const buttons: ButtonBuilder[] = [];
+
+	if (report.auth.state === "fail") {
+		buttons.push(
+			new ButtonBuilder()
+				.setStyle(ButtonStyle.Link)
+				.setLabel("Log in to Google")
+				.setURL(getAuthUrl()),
+		);
+	}
+	if (report.album.state === "fail") {
+		const album = getAlbum();
+		if (album?.title) {
+			buttons.push(
+				new ButtonBuilder()
+					.setCustomId(OWNER_BUTTON.recreateAlbum)
+					.setStyle(ButtonStyle.Primary)
+					.setLabel(`Recreate "${album.title}"`.slice(0, 80)),
+			);
+		}
+		buttons.push(
+			new ButtonBuilder()
+				.setCustomId(OWNER_BUTTON.pickAlbum)
+				.setStyle(ButtonStyle.Secondary)
+				.setLabel(album?.title ? "Choose another album" : "Choose album"),
+		);
+	}
+	buttons.push(
+		new ButtonBuilder()
+			.setCustomId(OWNER_BUTTON.status)
+			.setStyle(ButtonStyle.Secondary)
+			.setLabel("Check again"),
+	);
+
+	return [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)];
+}
+
+export const OWNER_BUTTON = {
+	recreateAlbum: "owner:album:recreate",
+	pickAlbum: "owner:album:pick",
+	status: "owner:status",
+} as const;
+
+async function notifyOwner(
+	content: string,
+	components: ActionRowBuilder<ButtonBuilder>[] = [],
+) {
 	const ownerId = process.env.DISCORD_OWNER_ID;
 	if (!ownerId || !client) return;
 	try {
 		const owner = await client.users.fetch(ownerId);
-		await owner.send(text);
+		await owner.send({ content, components });
 	} catch (error) {
 		console.error("[HEALTH] Failed to DM owner:", error);
 	}
 }
 
+function queueLine(): string {
+	const { messages, files } = getQueueSummary();
+	return files
+		? `\n${files} file(s) from ${messages} message(s) are waiting and will upload once this is fixed.`
+		: "";
+}
+
 async function tick() {
 	timer = null;
-	let report: HealthReport;
+	if (running) {
+		rerun = true;
+		return;
+	}
+	running = true;
 	try {
-		report = await runHealthCheck();
+		await check();
 	} catch (error) {
 		console.error("[HEALTH] Check crashed:", error);
 		schedule(INTERVAL_MS);
-		return;
+	} finally {
+		running = false;
+		if (rerun) {
+			rerun = false;
+			schedule(1_000);
+		}
 	}
+}
+
+async function check() {
+	const report = await runHealthCheck();
 	lastReport = report;
 	const problems = problemsOf(report);
 
 	if (problems) console.warn(`[HEALTH] Problems:\n${problems}`);
 	else console.log("[HEALTH] OK");
+
+	// Healthy: upload anything that was waiting.
+	let retried = 0;
+	if (!problems && client) retried = await retryQueued(client);
 
 	if (problems === notifiedProblems) {
 		pendingProblems = null;
@@ -189,17 +258,19 @@ async function tick() {
 		pendingProblems = null;
 		notifiedProblems = problems;
 		if (problems) {
-			const login =
-				report.auth.state === "fail" ? `\nLog in: ${getAuthUrl()}` : "";
 			await notifyOwner(
-				`⚠️ Chrollo has a problem. Photo uploads will fail until it's fixed.\n${problems}${login}\nUse /status to check again.`,
+				`⚠️ Chrollo has a problem, photos can't upload right now.\n${problems}${queueLine()}`,
+				ownerActionRows(report),
 			);
 		} else {
-			await notifyOwner("✅ Chrollo is healthy again. Uploads should work.");
+			const done = retried ? ` Uploaded ${retried} waiting file(s).` : "";
+			await notifyOwner(`✅ Chrollo is healthy again.${done}`);
 		}
 	}
 
-	schedule(problems ? RECHECK_MS * 5 : INTERVAL_MS);
+	// While files wait, check more often so they go up soon after recovery.
+	const waiting = getQueueSummary().files > 0;
+	schedule(problems ? RECHECK_MS * 5 : waiting ? RECHECK_MS * 2 : INTERVAL_MS);
 }
 
 function schedule(ms: number) {
