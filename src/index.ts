@@ -1,11 +1,17 @@
 import { Client, Collection, GatewayIntentBits } from "discord.js";
 import "dotenv/config";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import session from "express-session";
 import { oauth2Client, TOKEN_PATH } from "./googleClient.js";
+
+// Node races IPv4/IPv6 and drops each attempt after 250ms by default. When the
+// link to Google is slow (500ms+ connects seen on the Pi), every attempt gets
+// dropped and requests fail with ETIMEDOUT. Give each attempt more time.
+net.setDefaultAutoSelectFamilyAttemptTimeout(2000);
 
 const EXT = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
 const __filename = fileURLToPath(import.meta.url);

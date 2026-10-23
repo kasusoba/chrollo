@@ -241,8 +241,15 @@ export async function getValidatedAlbum() {
 				`Bot needs to re-authenticate with Google. Log in here: ${getAuthUrl()}`,
 			);
 		}
+		const status = (error as any)?.response?.status;
+		if (status === 404 || status === 400) {
+			throw new Error(
+				"The selected album does not exist on Google Photos. Please select a valid album using /album.",
+			);
+		}
+		console.error("[Get Album] Album check failed:", error);
 		throw new Error(
-			"The selected album does not exist on Google Photos. Please select a valid album using /album.",
+			`Couldn't reach Google Photos to check the album (${(error as any)?.code ?? status ?? "unknown error"}). Please try again in a bit.`,
 		);
 	}
 }
