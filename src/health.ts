@@ -6,7 +6,14 @@ import {
 } from "discord.js";
 import { getQueueSummary, retryQueued } from "./autoUpload.js";
 import { oauth2Client } from "./googleClient.js";
-import { describeError, getAlbum, getAuthUrl, isAuthError } from "./utils.js";
+import {
+	type Album,
+	describeError,
+	getAlbum,
+	getAuthUrl,
+	isAuthError,
+	UPLOAD_CHANNELS,
+} from "./utils.js";
 
 // Background health monitor. Checks Google reachability, auth and the album on
 // a timer, and DMs the owner only when the overall state changes, so problems
@@ -25,11 +32,25 @@ export interface Check {
 	detail: string;
 }
 
+export interface AlbumCheck extends Check {
+	channelId: string;
+	label: string;
+}
+
 export interface HealthReport {
 	checkedAt: number;
 	google: Check;
 	auth: Check;
-	album: Check;
+	/** One per upload channel. */
+	albums: AlbumCheck[];
+}
+
+/** The album check for one channel. */
+export function albumCheckFor(
+	report: HealthReport,
+	channelId: string,
+): AlbumCheck | undefined {
+	return report.albums.find((a) => a.channelId === channelId);
 }
 
 interface UploadEvent {
@@ -66,66 +87,90 @@ export async function runHealthCheck(): Promise<HealthReport> {
 		checkedAt: Date.now(),
 		google: { state: "skipped", detail: "" },
 		auth: { state: "skipped", detail: "" },
-		album: { state: "skipped", detail: "" },
+		albums: UPLOAD_CHANNELS.map((c) => ({
+			channelId: c.id,
+			label: c.label,
+			state: "skipped" as CheckState,
+			detail: "",
+		})),
 	};
+	const skipRest = (detail: string) => {
+		for (const a of report.albums) {
+			if (a.state === "skipped") a.detail = detail;
+		}
+	};
+
+	// Known without asking Google.
+	for (const a of report.albums) {
+		if (!getAlbum(a.channelId)) {
+			a.state = "fail";
+			a.detail = `none selected, run /album in #${a.label}`;
+		}
+	}
 
 	if (!oauth2Client.credentials?.refresh_token) {
 		report.auth = { state: "fail", detail: "not logged in" };
-		report.album = { state: "skipped", detail: "needs auth" };
+		skipRest("needs auth");
 		return report;
 	}
 
-	const album = getAlbum();
-	// Fetching the album also refreshes the access token, so one request
-	// covers reachability, auth and the album. Without an album, list instead.
-	const url = album?.id
-		? `https://photoslibrary.googleapis.com/v1/albums/${album.id}`
-		: "https://photoslibrary.googleapis.com/v1/albums?pageSize=1";
+	// Fetching an album also refreshes the access token, so these requests
+	// cover reachability and auth too.
+	const requests = report.albums
+		.filter((a) => a.state === "skipped")
+		.map((a) => ({ check: a, album: getAlbum(a.channelId) as Album }));
+	// No album set anywhere: list albums just to check Google and auth.
+	const targets: { check?: AlbumCheck; url: string; album?: Album }[] =
+		requests.length
+			? requests.map((r) => ({
+					check: r.check,
+					album: r.album,
+					url: `https://photoslibrary.googleapis.com/v1/albums/${r.album.id}`,
+				}))
+			: [{ url: "https://photoslibrary.googleapis.com/v1/albums?pageSize=1" }];
 
-	const started = Date.now();
-	try {
-		const response = await oauth2Client.request<{
-			title?: string;
-			mediaItemsCount?: string;
-		}>({ url, method: "GET", timeout: REQUEST_TIMEOUT_MS });
-		const ms = Date.now() - started;
+	for (const target of targets) {
+		const started = Date.now();
+		try {
+			const response = await oauth2Client.request<{
+				title?: string;
+				mediaItemsCount?: string;
+			}>({ url: target.url, method: "GET", timeout: REQUEST_TIMEOUT_MS });
+			const ms = Date.now() - started;
 
-		report.google = { state: "ok", detail: `reachable (${ms}ms)` };
-		report.auth = { state: "ok", detail: "OK" };
-		if (album?.id) {
-			const items = response.data.mediaItemsCount ?? "0";
-			report.album = {
-				state: "ok",
-				detail: `${response.data.title ?? album.title} (${items} items)`,
-			};
-		} else {
-			report.album = { state: "fail", detail: "none selected, use /album" };
-		}
-	} catch (error) {
-		const status = (error as { response?: { status?: number } })?.response
-			?.status;
-		const reason = describeError(error);
-
-		if (isAuthError(error)) {
-			report.google = { state: "ok", detail: "reachable" };
-			report.auth = { state: "fail", detail: reason };
-			report.album = { state: "skipped", detail: "needs auth" };
-		} else if (album?.id && (status === 404 || status === 400)) {
-			report.google = { state: "ok", detail: "reachable" };
+			if (report.google.state !== "ok") {
+				report.google = { state: "ok", detail: `reachable (${ms}ms)` };
+			}
 			report.auth = { state: "ok", detail: "OK" };
-			report.album = {
-				state: "fail",
-				detail: `"${album.title}" not found on Google Photos (${reason})`,
-			};
-		} else if (status && status < 500) {
-			// Google answered, but with an error we don't classify (e.g. 403 scope).
-			report.google = { state: "ok", detail: "reachable" };
-			report.auth = { state: "fail", detail: reason };
-			report.album = { state: "skipped", detail: "needs auth" };
-		} else {
-			report.google = { state: "fail", detail: `unreachable (${reason})` };
-			report.auth = { state: "skipped", detail: "Google unreachable" };
-			report.album = { state: "skipped", detail: "Google unreachable" };
+			if (target.check && target.album) {
+				const items = response.data.mediaItemsCount ?? "0";
+				target.check.state = "ok";
+				target.check.detail = `${response.data.title ?? target.album.title} (${items} items)`;
+			}
+		} catch (error) {
+			const status = (error as { response?: { status?: number } })?.response
+				?.status;
+			const reason = describeError(error);
+
+			if (target.check && target.album && (status === 404 || status === 400)) {
+				if (report.google.state !== "ok") {
+					report.google = { state: "ok", detail: "reachable" };
+				}
+				report.auth = { state: "ok", detail: "OK" };
+				target.check.state = "fail";
+				target.check.detail = `"${target.album.title}" not found on Google Photos (${reason})`;
+			} else if (isAuthError(error) || (status && status < 500)) {
+				// 401/invalid_grant, or another 4xx such as a missing scope.
+				report.google = { state: "ok", detail: "reachable" };
+				report.auth = { state: "fail", detail: reason };
+				skipRest("needs auth");
+				return report;
+			} else {
+				report.google = { state: "fail", detail: `unreachable (${reason})` };
+				report.auth = { state: "skipped", detail: "Google unreachable" };
+				skipRest("Google unreachable");
+				return report;
+			}
 		}
 	}
 
@@ -138,57 +183,64 @@ function problemsOf(report: HealthReport): string {
 		problems.push(`Google: ${report.google.detail}`);
 	if (report.auth.state === "fail")
 		problems.push(`Auth: ${report.auth.detail}`);
-	if (report.album.state === "fail")
-		problems.push(`Album: ${report.album.detail}`);
+	for (const a of report.albums) {
+		if (a.state === "fail") problems.push(`Album #${a.label}: ${a.detail}`);
+	}
 	return problems.join("\n");
 }
+
+export const OWNER_BUTTON = {
+	/** Followed by the channel ID. */
+	recreateAlbum: "owner:album:recreate:",
+	/** Followed by the channel ID. */
+	pickAlbum: "owner:album:pick:",
+	status: "owner:status",
+} as const;
 
 /** One-tap fixes for the owner, shown under the alert DM. */
 export function ownerActionRows(
 	report: HealthReport,
 ): ActionRowBuilder<ButtonBuilder>[] {
-	const buttons: ButtonBuilder[] = [];
+	const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+	const row = (...buttons: ButtonBuilder[]) =>
+		rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons));
 
 	if (report.auth.state === "fail") {
-		buttons.push(
+		row(
 			new ButtonBuilder()
 				.setStyle(ButtonStyle.Link)
 				.setLabel("Log in to Google")
 				.setURL(getAuthUrl()),
 		);
 	}
-	if (report.album.state === "fail") {
-		const album = getAlbum();
+	// Discord allows 5 rows: login, check again, and up to 3 album rows.
+	for (const a of report.albums.filter((x) => x.state === "fail").slice(0, 3)) {
+		const album = getAlbum(a.channelId);
+		const buttons: ButtonBuilder[] = [];
 		if (album?.title) {
 			buttons.push(
 				new ButtonBuilder()
-					.setCustomId(OWNER_BUTTON.recreateAlbum)
+					.setCustomId(OWNER_BUTTON.recreateAlbum + a.channelId)
 					.setStyle(ButtonStyle.Primary)
-					.setLabel(`Recreate "${album.title}"`.slice(0, 80)),
+					.setLabel(`Recreate "${album.title}" for #${a.label}`.slice(0, 80)),
 			);
 		}
 		buttons.push(
 			new ButtonBuilder()
-				.setCustomId(OWNER_BUTTON.pickAlbum)
+				.setCustomId(OWNER_BUTTON.pickAlbum + a.channelId)
 				.setStyle(ButtonStyle.Secondary)
-				.setLabel(album?.title ? "Choose another album" : "Choose album"),
+				.setLabel(`Choose album for #${a.label}`.slice(0, 80)),
 		);
+		row(...buttons);
 	}
-	buttons.push(
+	row(
 		new ButtonBuilder()
 			.setCustomId(OWNER_BUTTON.status)
 			.setStyle(ButtonStyle.Secondary)
 			.setLabel("Check again"),
 	);
-
-	return [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)];
+	return rows;
 }
-
-export const OWNER_BUTTON = {
-	recreateAlbum: "owner:album:recreate",
-	pickAlbum: "owner:album:pick",
-	status: "owner:status",
-} as const;
 
 async function notifyOwner(
 	content: string,

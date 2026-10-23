@@ -5,8 +5,11 @@ import {
 	type Client,
 	type Message,
 	MessageFlags,
+	type TextBasedChannel,
 } from "discord.js";
 import {
+	albumCheckFor,
+	type HealthReport,
 	recordUploadFailure,
 	recordUploadSuccess,
 	runHealthCheck,
@@ -27,6 +30,9 @@ import {
 
 const QUEUE_PATH = path.join(process.cwd(), "data", "queue.json");
 
+// Discord API error code for a deleted message.
+const UNKNOWN_MESSAGE = 10008;
+
 const WAITING = "⏳";
 const DONE = "✅";
 
@@ -34,6 +40,8 @@ type BlockedReason = "auth" | "album" | "network";
 
 interface QueueEntry {
 	messageId: string;
+	/** Upload channel the message was posted in. Older entries: omoide. */
+	channelId?: string;
 	/** Attachments still waiting to upload. */
 	attachmentIds: string[];
 	/** The bot's reply to the message, edited when the retry finishes. */
@@ -114,15 +122,18 @@ async function react(message: Message, add?: string, remove?: string) {
 	}
 }
 
-/** Checks Google, auth and album. Returns the album, or why uploads are blocked. */
-async function readiness(): Promise<
-	{ albumId: string; title: string } | { blocked: BlockedReason }
-> {
-	const report = await runHealthCheck();
+type Readiness =
+	| { albumId: string; title: string }
+	| { blocked: BlockedReason };
+
+/** Whether a channel can upload now: its album, or why it's blocked. */
+function readinessFrom(report: HealthReport, channelId: string): Readiness {
 	if (report.google.state === "fail") return { blocked: "network" };
 	if (report.auth.state === "fail") return { blocked: "auth" };
-	const album = getAlbum();
-	if (report.album.state !== "ok" || !album?.id) return { blocked: "album" };
+	const album = getAlbum(channelId);
+	if (albumCheckFor(report, channelId)?.state !== "ok" || !album) {
+		return { blocked: "album" };
+	}
 	return { albumId: album.id, title: album.title };
 }
 
@@ -149,13 +160,14 @@ export async function autoUpload(message: Message) {
 		.filter((a) => !isMediaAttachment(a))
 		.map((a) => `➖ ${a.name}: skipped, not a photo or video.`);
 
-	const ready = await readiness();
+	const ready = readinessFrom(await runHealthCheck(), message.channelId);
 
 	if ("blocked" in ready) {
 		recordUploadFailure(`blocked: ${ready.blocked}`);
 		// Queue first, so the files are saved even if replying fails.
 		const entry: QueueEntry = {
 			messageId: message.id,
+			channelId: message.channelId,
 			attachmentIds: media.map((a) => a.id),
 			notes: skipped,
 			uploadedCount: 0,
@@ -214,6 +226,7 @@ export async function autoUpload(message: Message) {
 	const entry: QueueEntry | null = retry.length
 		? {
 				messageId: message.id,
+				channelId: message.channelId,
 				attachmentIds: retry.map((f) => f.attachmentId),
 				notes,
 				uploadedCount: result.numOfUploaded,
@@ -270,20 +283,40 @@ export async function retryQueued(client: Client): Promise<number> {
 	let uploaded = 0;
 
 	try {
-		const ready = await readiness();
-		if ("blocked" in ready) return 0;
-
-		const channel = await client.channels.fetch(OPERATING_CHANNEL_ID);
-		if (!channel?.isTextBased()) return 0;
+		const report = await runHealthCheck();
+		if (report.google.state === "fail" || report.auth.state === "fail") {
+			return 0;
+		}
 
 		for (const entry of [...queue]) {
+			const channelId = entry.channelId ?? OPERATING_CHANNEL_ID;
+			// A broken album in one channel doesn't hold up the others.
+			const ready = readinessFrom(report, channelId);
+			if ("blocked" in ready) continue;
+
+			let channel: TextBasedChannel;
 			let message: Message;
 			try {
-				message = await channel.messages.fetch(entry.messageId);
-			} catch {
-				console.log(`[QUEUE] Message ${entry.messageId} is gone, dropping it.`);
-				removeFromQueue(entry.messageId);
+				const fetched = await client.channels.fetch(channelId);
+				if (!fetched?.isTextBased()) throw new Error("not a text channel");
+				channel = fetched;
+			} catch (error) {
+				console.error(`[QUEUE] Can't open channel ${channelId}:`, error);
 				continue;
+			}
+			try {
+				message = await channel.messages.fetch(entry.messageId);
+			} catch (error) {
+				if ((error as { code?: number })?.code === UNKNOWN_MESSAGE) {
+					console.log(
+						`[QUEUE] Message ${entry.messageId} was deleted, dropping it.`,
+					);
+					removeFromQueue(entry.messageId);
+					continue;
+				}
+				// Discord hiccup: keep the entry and try again next round.
+				console.error(`[QUEUE] Couldn't fetch ${entry.messageId}:`, error);
+				break;
 			}
 
 			const waiting = new Set(entry.attachmentIds);

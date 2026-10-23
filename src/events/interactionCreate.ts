@@ -1,6 +1,6 @@
 import { Collection, Events, type Interaction, MessageFlags } from "discord.js";
 import { handleOwnerButton } from "../ownerActions.js";
-import { OPERATING_CHANNEL_ID, OPERATING_GUILD_ID } from "../utils.js";
+import { isUploadChannel, UPLOAD_CHANNELS } from "../utils.js";
 
 export default {
 	name: Events.InteractionCreate,
@@ -29,12 +29,10 @@ export default {
 
 		// Allow control from the owner's DM or the operating channel only.
 		const inDM = !interaction.inGuild();
-		const inOperatingChannel =
-			interaction.guildId === OPERATING_GUILD_ID &&
-			interaction.channelId === OPERATING_CHANNEL_ID;
+		const inOperatingChannel = isUploadChannel(interaction.channelId);
 		if (!inDM && !inOperatingChannel) {
 			return interaction.reply({
-				content: "Use me in my DM or the omoide channel.",
+				content: `Use me in my DM or ${UPLOAD_CHANNELS.map((c) => `#${c.label}`).join(", ")}.`,
 				flags: MessageFlags.Ephemeral,
 			});
 		}

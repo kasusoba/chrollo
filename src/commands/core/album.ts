@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import {
 	ActionRowBuilder,
 	ButtonBuilder,
@@ -18,33 +17,36 @@ import {
 import { oauth2Client } from "../../googleClient.js";
 import { triggerHealthCheck } from "../../health.js";
 import {
-	ALBUM_PATH,
+	channelLabel,
+	commandChannelId,
 	type GetAlbumsResponse,
 	type GoogleAlbum,
 	getAlbum,
+	saveAlbum,
+	UPLOAD_CHANNELS,
 } from "../../utils.js";
 
-export function saveAlbumFile(albumObject: { id: string; title: string }) {
-	if (fs.existsSync(ALBUM_PATH)) {
-		const currentData = JSON.parse(fs.readFileSync(ALBUM_PATH, "utf-8"));
-		const newData = { ...currentData, ...albumObject };
-		fs.writeFileSync(ALBUM_PATH, JSON.stringify(newData, null, 2));
-		console.log("[INTERACTION: Album] Album updated in album.json");
-	} else {
-		console.log("[INTERACTION: Album] No album found. Creating album.json");
-		fs.writeFileSync(ALBUM_PATH, JSON.stringify(albumObject, null, 2));
-		console.log("[INTERACTION: Album] Album saved to disk.");
-	}
+function selectAlbum(channelId: string, album: { id: string; title: string }) {
+	saveAlbum(channelId, album);
 	triggerHealthCheck();
 }
 
 export const data = new SlashCommandBuilder()
 	.setName("album")
-	.setDescription("Manage albums.")
-	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM]);
+	.setDescription("Choose the album a channel uploads to.")
+	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM])
+	.addStringOption((option) =>
+		option
+			.setName("channel")
+			.setDescription(
+				"Which channel (default: the one you're in, or omoide from DM)",
+			)
+			.addChoices(UPLOAD_CHANNELS.map((c) => ({ name: c.label, value: c.id }))),
+	);
 
 /** Creates a Google Photos album and makes it the upload target. */
 export async function createAndSelectAlbum(
+	channelId: string,
 	title: string,
 ): Promise<GoogleAlbum> {
 	const createResponse = await oauth2Client.request<GoogleAlbum>({
@@ -54,13 +56,22 @@ export async function createAndSelectAlbum(
 		data: { album: { title } },
 	});
 	console.log("Album creation success:", createResponse.data);
-	saveAlbumFile({ id: createResponse.data.id, title });
+	selectAlbum(channelId, { id: createResponse.data.id, title });
 	return createResponse.data;
 }
 
 export async function execute(
 	interaction: ChatInputCommandInteraction | ButtonInteraction,
+	forChannelId?: string,
 ) {
+	const channelId =
+		forChannelId ??
+		(interaction.isChatInputCommand()
+			? interaction.options.getString("channel")
+			: null) ??
+		commandChannelId(interaction);
+	const label = channelLabel(channelId);
+
 	const getResponse = await oauth2Client.request<GetAlbumsResponse>({
 		url: "https://photoslibrary.googleapis.com/v1/albums",
 		method: "GET",
@@ -70,7 +81,7 @@ export async function execute(
 
 	const albumsArray = getResponse.data.albums || [];
 
-	const currentAlbumId = getAlbum()?.id;
+	const currentAlbumId = getAlbum(channelId)?.id;
 
 	const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
@@ -113,7 +124,7 @@ export async function execute(
 	);
 
 	const response = await interaction.reply({
-		content: "Choose an option to manage albums:",
+		content: `Choose the album for **#${label}**:`,
 		components: rows,
 		withResponse: true,
 		flags: MessageFlags.Ephemeral,
@@ -156,10 +167,10 @@ export async function execute(
 
 			await modalSubmission.deferUpdate();
 
-			await createAndSelectAlbum(albumName);
+			await createAndSelectAlbum(channelId, albumName);
 
 			await interaction.editReply({
-				content: `Album **${albumName}** created and selected successfully!`,
+				content: `Album **${albumName}** created and selected for **#${label}**!`,
 				components: [],
 			});
 		} else if (confirmation.customId === "select") {
@@ -179,14 +190,11 @@ export async function execute(
 				albumsArray.find((album) => album.id === selectedAlbumId)?.title || "";
 
 			if (currentAlbumId !== selectedAlbumId) {
-				saveAlbumFile({
-					id: selectedAlbumId,
-					title: albumTitle,
-				});
+				selectAlbum(channelId, { id: selectedAlbumId, title: albumTitle });
 			}
 
 			await confirmation.update({
-				content: `Album **${albumTitle}** selected successfully!`,
+				content: `Album **${albumTitle}** selected for **#${label}**!`,
 				components: [],
 			});
 		} else if (confirmation.customId === "cancel") {

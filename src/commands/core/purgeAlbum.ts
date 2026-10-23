@@ -11,6 +11,7 @@ import {
 import {
 	type Album,
 	batchRemoveMediaItems,
+	commandChannelId,
 	getAllMediaItemsInAlbum,
 	getValidatedAlbum,
 } from "../../utils.js";
@@ -28,7 +29,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 	let album: Album;
 	try {
-		album = await getValidatedAlbum();
+		album = await getValidatedAlbum(commandChannelId(interaction));
 	} catch (e: any) {
 		await interaction.editReply({ content: e.message });
 		return;

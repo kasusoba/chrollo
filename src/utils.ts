@@ -7,9 +7,40 @@ import type { Attachment, Message } from "discord.js";
 import { exiftool } from "exiftool-vendored";
 import { oauth2Client } from "./googleClient.js";
 
-// The single server + channel the bot operates on (auto-uploads photos from).
+// The main server + channel (omoide). Used as the default when a command is
+// run from a DM, and by the backfill script.
 export const OPERATING_GUILD_ID = "324920310459793410"; // dmc
 export const OPERATING_CHANNEL_ID = "1046093481774424184"; // omoide
+
+export interface UploadChannel {
+	id: string;
+	label: string;
+}
+
+// Channels the bot uploads photos from. Each one has its own album, set by
+// running /album in that channel. Channel IDs are unique across Discord, so
+// they can be in any server the bot is in.
+export const UPLOAD_CHANNELS: UploadChannel[] = [
+	{ id: OPERATING_CHANNEL_ID, label: "omoide" },
+	{ id: "1450051502348439684", label: "test" },
+];
+
+export function isUploadChannel(channelId: string | null): boolean {
+	return UPLOAD_CHANNELS.some((c) => c.id === channelId);
+}
+
+export function channelLabel(channelId: string): string {
+	return UPLOAD_CHANNELS.find((c) => c.id === channelId)?.label ?? channelId;
+}
+
+/** The upload channel a command acts on: where it was run, or omoide from a DM. */
+export function commandChannelId(interaction: {
+	channelId: string | null;
+}): string {
+	return isUploadChannel(interaction.channelId)
+		? (interaction.channelId as string)
+		: OPERATING_CHANNEL_ID;
+}
 
 const ALBUM_FILE_NAME = "album.json";
 
@@ -183,19 +214,42 @@ export async function requestWithRetry<T>(
 
 // ------------------------------
 
-export function getAlbum(): Album | null {
-	if (fs.existsSync(ALBUM_PATH)) {
-		const data = JSON.parse(fs.readFileSync(ALBUM_PATH, "utf-8"));
-		console.log("[INTERACTION: Album] Loaded album from album.json");
-		return data;
-	} else {
-		console.log("[INTERACTION: Album] No album found.");
-		return null;
+/**
+ * album.json maps channel ID -> album. The old format (a single album) is read
+ * as omoide's album and rewritten in the new format on the next save.
+ */
+function readAlbumMap(): Record<string, Album> {
+	try {
+		const raw = JSON.parse(fs.readFileSync(ALBUM_PATH, "utf-8"));
+		if (raw && typeof raw.id === "string") {
+			return { [OPERATING_CHANNEL_ID]: { id: raw.id, title: raw.title } };
+		}
+		return raw && typeof raw === "object" ? raw : {};
+	} catch {
+		// Missing or empty file: no albums yet.
+		return {};
 	}
 }
 
-export async function getValidatedAlbum() {
-	const album = getAlbum();
+export function getAlbum(
+	channelId: string = OPERATING_CHANNEL_ID,
+): Album | null {
+	const album = readAlbumMap()[channelId];
+	return album?.id ? album : null;
+}
+
+export function saveAlbum(channelId: string, album: Album) {
+	const albums = readAlbumMap();
+	albums[channelId] = { id: album.id, title: album.title };
+	// Write in place (no rename): album.json is a single-file Docker bind mount.
+	fs.writeFileSync(ALBUM_PATH, JSON.stringify(albums, null, 2));
+	console.log(`[ALBUM] ${channelLabel(channelId)} -> ${album.title}`);
+}
+
+export async function getValidatedAlbum(
+	channelId: string = OPERATING_CHANNEL_ID,
+) {
+	const album = getAlbum(channelId);
 
 	if (!album || !album.id) {
 		throw new Error(

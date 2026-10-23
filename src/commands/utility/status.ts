@@ -31,7 +31,9 @@ const status = {
 			`✅ Discord: connected (${interaction.client.ws.ping}ms)`,
 			`${icon(report.google)} Google: ${report.google.detail}`,
 			`${icon(report.auth)} Auth: ${report.auth.detail}`,
-			`${icon(report.album)} Album: ${report.album.detail}`,
+			...report.albums.map(
+				(a) => `${icon(a)} Album #${a.label}: ${a.detail || "-"}`,
+			),
 			"",
 			lastUpload
 				? `Last upload: ${lastUpload.count} file(s) ${ago(lastUpload.at)}`

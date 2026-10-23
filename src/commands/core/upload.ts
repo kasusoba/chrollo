@@ -13,11 +13,12 @@ import {
 import { removeFromQueue } from "../../autoUpload.js";
 import {
 	type Album,
+	channelLabel,
+	commandChannelId,
 	getMessageAttachments,
 	getUploadedMessageIdsInAlbum,
 	getValidatedAlbum,
 	hasUploadableAttachments,
-	OPERATING_CHANNEL_ID,
 	uploadPhotos,
 } from "../../utils.js";
 
@@ -79,9 +80,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 		flags: MessageFlags.Ephemeral,
 	});
 
+	// The channel it was run in, or omoide when run from a DM.
+	const channelId = commandChannelId(interaction);
+
 	let album: Album;
 	try {
-		album = await getValidatedAlbum();
+		album = await getValidatedAlbum(channelId);
 	} catch (error) {
 		await interaction.editReply({
 			content: error instanceof Error ? error.message : "Album error",
@@ -90,16 +94,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	}
 	const albumId = album.id;
 
-	// Always operate on the omoide channel, even when invoked from a DM.
-	const targetChannel =
-		await interaction.client.channels.fetch(OPERATING_CHANNEL_ID);
+	const targetChannel = await interaction.client.channels.fetch(channelId);
 	if (
 		!targetChannel ||
 		!targetChannel.isTextBased() ||
 		!targetChannel.isSendable()
 	) {
 		await interaction.editReply({
-			content: "Could not access the omoide channel.",
+			content: `Could not access the #${channelLabel(channelId)} channel.`,
 		});
 		return;
 	}
