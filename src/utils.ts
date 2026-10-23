@@ -7,40 +7,10 @@ import type { Attachment, Message } from "discord.js";
 import { exiftool } from "exiftool-vendored";
 import { oauth2Client } from "./googleClient.js";
 
-// The main server + channel (omoide). Used as the default when a command is
-// run from a DM, and by the backfill script.
+// omoide. Only used to read old files (album.json and queue entries from
+// before channels were linked with /link) and by the backfill script.
 export const OPERATING_GUILD_ID = "324920310459793410"; // dmc
 export const OPERATING_CHANNEL_ID = "1046093481774424184"; // omoide
-
-export interface UploadChannel {
-	id: string;
-	label: string;
-}
-
-// Channels the bot uploads photos from. Each one has its own album, set by
-// running /album in that channel. Channel IDs are unique across Discord, so
-// they can be in any server the bot is in.
-export const UPLOAD_CHANNELS: UploadChannel[] = [
-	{ id: OPERATING_CHANNEL_ID, label: "omoide" },
-	{ id: "1450051502348439684", label: "bot-test" },
-];
-
-export function isUploadChannel(channelId: string | null): boolean {
-	return UPLOAD_CHANNELS.some((c) => c.id === channelId);
-}
-
-export function channelLabel(channelId: string): string {
-	return UPLOAD_CHANNELS.find((c) => c.id === channelId)?.label ?? channelId;
-}
-
-/** The upload channel a command acts on: where it was run, or omoide from a DM. */
-export function commandChannelId(interaction: {
-	channelId: string | null;
-}): string {
-	return isUploadChannel(interaction.channelId)
-		? (interaction.channelId as string)
-		: OPERATING_CHANNEL_ID;
-}
 
 const ALBUM_FILE_NAME = "album.json";
 
@@ -214,36 +184,88 @@ export async function requestWithRetry<T>(
 
 // ------------------------------
 
+/** A channel that uploads, and the album it uploads to. */
+export interface LinkedChannel {
+	channelId: string;
+	/** Channel name when it was linked, for messages. */
+	label: string;
+	album: Album;
+}
+
+interface StoredLink extends Album {
+	channelName?: string;
+}
+
 /**
- * album.json maps channel ID -> album. The old format (a single album) is read
- * as omoide's album and rewritten in the new format on the next save.
+ * album.json maps channel ID -> album. A channel uploads only while it has an
+ * entry (added by /link, removed by /unlink). The old format (one album) is
+ * read as omoide's link.
  */
-function readAlbumMap(): Record<string, Album> {
+function readLinks(): Record<string, StoredLink> {
 	try {
 		const raw = JSON.parse(fs.readFileSync(ALBUM_PATH, "utf-8"));
 		if (raw && typeof raw.id === "string") {
-			return { [OPERATING_CHANNEL_ID]: { id: raw.id, title: raw.title } };
+			return {
+				[OPERATING_CHANNEL_ID]: {
+					id: raw.id,
+					title: raw.title,
+					channelName: "omoide",
+				},
+			};
 		}
 		return raw && typeof raw === "object" ? raw : {};
 	} catch {
-		// Missing or empty file: no albums yet.
+		// Missing or empty file: nothing linked yet.
 		return {};
 	}
 }
 
-export function getAlbum(
-	channelId: string = OPERATING_CHANNEL_ID,
-): Album | null {
-	const album = readAlbumMap()[channelId];
-	return album?.id ? album : null;
+function writeLinks(links: Record<string, StoredLink>) {
+	// Write in place (no rename): album.json is a single-file Docker bind mount.
+	fs.writeFileSync(ALBUM_PATH, JSON.stringify(links, null, 2));
 }
 
-export function saveAlbum(channelId: string, album: Album) {
-	const albums = readAlbumMap();
-	albums[channelId] = { id: album.id, title: album.title };
-	// Write in place (no rename): album.json is a single-file Docker bind mount.
-	fs.writeFileSync(ALBUM_PATH, JSON.stringify(albums, null, 2));
-	console.log(`[ALBUM] ${channelLabel(channelId)} -> ${album.title}`);
+export function getLinkedChannels(): LinkedChannel[] {
+	return Object.entries(readLinks())
+		.filter(([, link]) => link?.id)
+		.map(([channelId, link]) => ({
+			channelId,
+			label: link.channelName ?? channelId,
+			album: { id: link.id, title: link.title },
+		}));
+}
+
+export function isUploadChannel(channelId: string | null): boolean {
+	return !!channelId && !!readLinks()[channelId]?.id;
+}
+
+export function channelLabel(channelId: string): string {
+	return readLinks()[channelId]?.channelName ?? channelId;
+}
+
+export function getAlbum(channelId: string): Album | null {
+	const link = readLinks()[channelId];
+	return link?.id ? { id: link.id, title: link.title } : null;
+}
+
+export function linkChannel(
+	channelId: string,
+	channelName: string,
+	album: Album,
+) {
+	const links = readLinks();
+	links[channelId] = { id: album.id, title: album.title, channelName };
+	writeLinks(links);
+	console.log(`[LINK] #${channelName} -> ${album.title}`);
+}
+
+export function unlinkChannel(channelId: string): boolean {
+	const links = readLinks();
+	if (!links[channelId]) return false;
+	console.log(`[LINK] #${links[channelId].channelName ?? channelId} unlinked`);
+	delete links[channelId];
+	writeLinks(links);
+	return true;
 }
 
 export async function getValidatedAlbum(
@@ -253,7 +275,7 @@ export async function getValidatedAlbum(
 
 	if (!album || !album.id) {
 		throw new Error(
-			"No album selected. Please select an album using /album before uploading.",
+			"This channel isn't linked to an album. Run /link here first.",
 		);
 	}
 
@@ -278,7 +300,7 @@ export async function getValidatedAlbum(
 		const status = (error as any)?.response?.status;
 		if (status === 404 || status === 400) {
 			throw new Error(
-				"The selected album does not exist on Google Photos. Please select a valid album using /album.",
+				"This channel's album no longer exists on Google Photos. Run /link here to choose another.",
 			);
 		}
 		console.error("[Get Album] Album check failed:", error);

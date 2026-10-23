@@ -90,6 +90,18 @@ export function removeFromQueue(messageId: string) {
 	if (queue.length !== before) saveQueue();
 }
 
+/** Drops a channel's waiting files (after /unlink). Returns how many. */
+export function dropQueuedForChannel(channelId: string): number {
+	const dropped = queue.filter(
+		(e) => (e.channelId ?? OPERATING_CHANNEL_ID) === channelId,
+	);
+	if (dropped.length) {
+		queue = queue.filter((e) => !dropped.includes(e));
+		saveQueue();
+	}
+	return dropped.reduce((sum, e) => sum + e.attachmentIds.length, 0);
+}
+
 function upsert(entry: QueueEntry) {
 	queue = queue.filter((e) => e.messageId !== entry.messageId);
 	queue.push(entry);

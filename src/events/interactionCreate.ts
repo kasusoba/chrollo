@@ -1,12 +1,11 @@
 import { Collection, Events, type Interaction, MessageFlags } from "discord.js";
 import { handleOwnerButton } from "../ownerActions.js";
-import { isUploadChannel, UPLOAD_CHANNELS } from "../utils.js";
 
 export default {
 	name: Events.InteractionCreate,
 	async execute(interaction: Interaction) {
 		// Buttons on the health alert DM. Other buttons belong to a command's
-		// own collector (e.g. /album) and are ignored here.
+		// own collector (e.g. /link) and are ignored here.
 		if (interaction.isButton()) {
 			try {
 				await handleOwnerButton(interaction);
@@ -27,15 +26,8 @@ export default {
 			});
 		}
 
-		// Allow control from the owner's DM or the operating channel only.
-		const inDM = !interaction.inGuild();
-		const inOperatingChannel = isUploadChannel(interaction.channelId);
-		if (!inDM && !inOperatingChannel) {
-			return interaction.reply({
-				content: `Use me in my DM or ${UPLOAD_CHANNELS.map((c) => `#${c.label}`).join(", ")}.`,
-				flags: MessageFlags.Ephemeral,
-			});
-		}
+		// Commands work in any channel (/link has to, to start uploading there).
+		// Commands that need a linked channel say so themselves.
 
 		const command = interaction.client.commands.get(interaction.commandName);
 

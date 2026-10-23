@@ -1,5 +1,5 @@
 import { type ButtonInteraction, MessageFlags } from "discord.js";
-import * as albumCommand from "./commands/core/album.js";
+import * as linkCommand from "./commands/core/link.js";
 import statusCommand from "./commands/utility/status.js";
 import {
 	albumCheckFor,
@@ -30,7 +30,7 @@ export async function handleOwnerButton(
 	} else if (id.startsWith(OWNER_BUTTON.pickAlbum)) {
 		const channelId = id.slice(OWNER_BUTTON.pickAlbum.length);
 		if (isUploadChannel(channelId)) {
-			await albumCommand.execute(interaction, channelId);
+			await linkCommand.execute(interaction, channelId);
 		}
 	} else if (id.startsWith(OWNER_BUTTON.recreateAlbum)) {
 		const channelId = id.slice(OWNER_BUTTON.recreateAlbum.length);
@@ -63,7 +63,7 @@ async function recreateAlbum(
 	}
 
 	const title = getAlbum(channelId)?.title || label;
-	await albumCommand.createAndSelectAlbum(channelId, title);
+	await linkCommand.createAndLinkAlbum(channelId, label, title);
 	triggerHealthCheck();
 	await interaction.editReply(
 		`Created a new album **${title}** for #${label}. Waiting photos will upload in a moment. The new album starts empty: photos from the old one are still in your Google Photos library.`,

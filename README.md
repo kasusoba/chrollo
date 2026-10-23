@@ -13,9 +13,17 @@ docker compose down            # stop
 
 ## Channels and albums
 
-The bot uploads from the channels listed in `UPLOAD_CHANNELS` (`src/utils.ts`): omoide and a private test channel (#bot-test). They can be in any server the bot is in. Each channel has its own album: run `/album` in that channel (or `/album channel:<name>` from a DM) to pick or create it. `album.json` stores one album per channel.
+A channel uploads only once it's linked to an album. Run `/link` in any channel, in any server the bot is in, and pick or create an album. `/unlink` stops it. Only `DISCORD_OWNER_ID` can run commands. `album.json` stores the links (channel ID to album), and the old one-album file is read as omoide's link.
 
-To add a channel: invite the bot to its server (OAuth2 URL with `bot` + `applications.commands`, permissions View Channels, Send Messages, Read Message History, Add Reactions), add the channel ID to `UPLOAD_CHANNELS`, redeploy, then run `/album` there.
+For a channel in another server, invite the bot first: Developer Portal, OAuth2, URL Generator, scopes `bot` + `applications.commands`, permissions View Channels, Send Messages, Read Message History, Add Reactions. `/link` tells you if a permission is missing.
+
+| Command | What it does |
+|---|---|
+| `/link` | Upload photos from this channel to an album (or switch album) |
+| `/unlink` | Stop uploading from this channel |
+| `/upload message\|from\|range` | Upload photos from older messages in this channel, skipping ones already in the album |
+| `/clearalbum` | Remove the bot's photos from this channel's album (they stay in your library) |
+| `/status` | Google, login, every linked channel's album, and waiting uploads |
 
 ## Health check
 

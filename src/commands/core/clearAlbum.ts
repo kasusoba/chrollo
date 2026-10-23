@@ -11,17 +11,16 @@ import {
 import {
 	type Album,
 	batchRemoveMediaItems,
-	commandChannelId,
 	getAllMediaItemsInAlbum,
 	getValidatedAlbum,
 } from "../../utils.js";
 
 export const data = new SlashCommandBuilder()
-	.setName("purgealbum")
+	.setName("clearalbum")
 	.setDescription(
-		"Delete ALL app-created media from the currently selected album.",
+		"Remove all bot-uploaded photos from this channel's album. They stay in your library.",
 	)
-	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM]);
+	.setContexts([InteractionContextType.Guild]);
 
 export async function execute(interaction: ChatInputCommandInteraction) {
 	// 1. Validation and Setup
@@ -29,7 +28,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
 	let album: Album;
 	try {
-		album = await getValidatedAlbum(commandChannelId(interaction));
+		album = await getValidatedAlbum(interaction.channelId);
 	} catch (e: any) {
 		await interaction.editReply({ content: e.message });
 		return;
@@ -59,7 +58,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	// 3. Confirmation Prompt
 	const confirmButton = new ButtonBuilder()
 		.setCustomId("confirm_purge")
-		.setLabel(`Yes, Delete ${mediaIds.length} Items`)
+		.setLabel(`Yes, remove ${mediaIds.length} items`)
 		.setStyle(ButtonStyle.Danger);
 
 	const cancelButton = new ButtonBuilder()
@@ -73,7 +72,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	);
 
 	const response = await interaction.editReply({
-		content: `⚠️ **WARNING** ⚠️\nYou are about to remove **${mediaIds.length}** media items from album **${album.title}**.\n\nNote: This only removes items created by this bot. If the bot fails to remove specific items, they may not have been created by the bot.\n\nProceed?`,
+		content: `⚠️ **WARNING** ⚠️\nYou are about to remove **${mediaIds.length}** media items from album **${album.title}**.\n\nThe photos stay in your Google Photos library, only the album is emptied. Only items the bot uploaded can be removed.\nAfterwards /upload no longer knows these messages were uploaded, so running it over the same messages uploads them again.\n\nProceed?`,
 		components: [row],
 	});
 
@@ -93,13 +92,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 		}
 
 		if (i.customId === "cancel_purge") {
-			await i.update({ content: "Purge cancelled.", components: [] });
+			await i.update({
+				content: "Cancelled, nothing removed.",
+				components: [],
+			});
 			return;
 		}
 
 		if (i.customId === "confirm_purge") {
 			await i.update({
-				content: `Starting purge of ${mediaIds.length} items. This may take a moment...`,
+				content: `Removing ${mediaIds.length} items. This may take a moment...`,
 				components: [],
 			});
 
@@ -123,7 +125,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	collector.on("end", async (collected) => {
 		if (collected.size === 0) {
 			await interaction.editReply({
-				content: "Purge request timed out.",
+				content: "Timed out, nothing removed.",
 				components: [],
 			});
 		}

@@ -19,7 +19,7 @@ const status = {
 	cooldown: 5,
 	data: new SlashCommandBuilder()
 		.setName("status")
-		.setDescription("Check if the bot is healthy: Google, auth, album.")
+		.setDescription("Check if the bot is healthy: Google, login, linked albums.")
 		.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM]),
 	async execute(interaction: ChatInputCommandInteraction | ButtonInteraction) {
 		await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -31,9 +31,11 @@ const status = {
 			`✅ Discord: connected (${interaction.client.ws.ping}ms)`,
 			`${icon(report.google)} Google: ${report.google.detail}`,
 			`${icon(report.auth)} Auth: ${report.auth.detail}`,
-			...report.albums.map(
-				(a) => `${icon(a)} Album #${a.label}: ${a.detail || "-"}`,
-			),
+			...(report.albums.length
+				? report.albums.map((a) => `${icon(a)} #${a.label}: ${a.detail || "-"}`)
+				: [
+						"➖ No channels linked. Run /link in a channel to start uploading.",
+					]),
 			"",
 			lastUpload
 				? `Last upload: ${lastUpload.count} file(s) ${ago(lastUpload.at)}`

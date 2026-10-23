@@ -11,8 +11,9 @@ import {
 	describeError,
 	getAlbum,
 	getAuthUrl,
+	getLinkedChannels,
 	isAuthError,
-	UPLOAD_CHANNELS,
+	type LinkedChannel,
 } from "./utils.js";
 
 // Background health monitor. Checks Google reachability, auth and the album on
@@ -87,26 +88,20 @@ export async function runHealthCheck(): Promise<HealthReport> {
 		checkedAt: Date.now(),
 		google: { state: "skipped", detail: "" },
 		auth: { state: "skipped", detail: "" },
-		albums: UPLOAD_CHANNELS.map((c) => ({
-			channelId: c.id,
-			label: c.label,
-			state: "skipped" as CheckState,
-			detail: "",
-		})),
+		albums: [],
 	};
+	const linked = getLinkedChannels();
+	report.albums = linked.map((c) => ({
+		channelId: c.channelId,
+		label: c.label,
+		state: "skipped" as CheckState,
+		detail: "",
+	}));
 	const skipRest = (detail: string) => {
 		for (const a of report.albums) {
 			if (a.state === "skipped") a.detail = detail;
 		}
 	};
-
-	// Known without asking Google.
-	for (const a of report.albums) {
-		if (!getAlbum(a.channelId)) {
-			a.state = "fail";
-			a.detail = `none selected, run /album in #${a.label}`;
-		}
-	}
 
 	if (!oauth2Client.credentials?.refresh_token) {
 		report.auth = { state: "fail", detail: "not logged in" };
@@ -116,10 +111,11 @@ export async function runHealthCheck(): Promise<HealthReport> {
 
 	// Fetching an album also refreshes the access token, so these requests
 	// cover reachability and auth too.
-	const requests = report.albums
-		.filter((a) => a.state === "skipped")
-		.map((a) => ({ check: a, album: getAlbum(a.channelId) as Album }));
-	// No album set anywhere: list albums just to check Google and auth.
+	const requests = report.albums.map((check, i) => ({
+		check,
+		album: (linked[i] as LinkedChannel).album,
+	}));
+	// Nothing linked: list albums just to check Google and auth.
 	const targets: { check?: AlbumCheck; url: string; album?: Album }[] =
 		requests.length
 			? requests.map((r) => ({
@@ -229,7 +225,7 @@ export function ownerActionRows(
 			new ButtonBuilder()
 				.setCustomId(OWNER_BUTTON.pickAlbum + a.channelId)
 				.setStyle(ButtonStyle.Secondary)
-				.setLabel(`Choose album for #${a.label}`.slice(0, 80)),
+				.setLabel(`Choose another album for #${a.label}`.slice(0, 80)),
 		);
 		row(...buttons);
 	}

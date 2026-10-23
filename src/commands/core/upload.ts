@@ -14,7 +14,6 @@ import { removeFromQueue } from "../../autoUpload.js";
 import {
 	type Album,
 	channelLabel,
-	commandChannelId,
 	getMessageAttachments,
 	getUploadedMessageIdsInAlbum,
 	getValidatedAlbum,
@@ -26,12 +25,12 @@ const MAX_ALLOWED_MESSAGES_FETCH = 100;
 
 export const data = new SlashCommandBuilder()
 	.setName("upload")
-	.setDescription("Upload existing photos in a channel.")
-	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM])
+	.setDescription("Upload photos from older messages in this channel.")
+	.setContexts([InteractionContextType.Guild])
 	.addSubcommand((subcommand) =>
 		subcommand
-			.setName("id")
-			.setDescription("Upload only this message id attachment")
+			.setName("message")
+			.setDescription("Upload the photos of one message")
 			.addStringOption((option) =>
 				option
 					.setName("message_id")
@@ -41,10 +40,8 @@ export const data = new SlashCommandBuilder()
 	)
 	.addSubcommand((subcommand) =>
 		subcommand
-			.setName("until")
-			.setDescription(
-				"Upload all messages STARTING from this ID up to the latest",
-			)
+			.setName("from")
+			.setDescription("Upload every message from this one up to the latest")
 			.addStringOption((option) =>
 				option
 					.setName("message_id")
@@ -80,8 +77,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 		flags: MessageFlags.Ephemeral,
 	});
 
-	// The channel it was run in, or omoide when run from a DM.
-	const channelId = commandChannelId(interaction);
+	const channelId = interaction.channelId;
 
 	let album: Album;
 	try {
@@ -198,7 +194,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 	}
 
 	switch (subcommand) {
-		case "id": {
+		case "message": {
 			try {
 				await updateProgress("Fetching message...");
 				const messageId = interaction.options.getString("message_id", true);
@@ -249,7 +245,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 			break;
 		}
 
-		case "until": {
+		case "from": {
 			const messageId = interaction.options.getString("message_id", true);
 			const selectedMessage = await channel.messages.fetch(messageId);
 

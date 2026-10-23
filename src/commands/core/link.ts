@@ -8,6 +8,7 @@ import {
 	LabelBuilder,
 	MessageFlags,
 	ModalBuilder,
+	PermissionFlagsBits,
 	SlashCommandBuilder,
 	StringSelectMenuBuilder,
 	StringSelectMenuOptionBuilder,
@@ -18,35 +19,42 @@ import { oauth2Client } from "../../googleClient.js";
 import { triggerHealthCheck } from "../../health.js";
 import {
 	channelLabel,
-	commandChannelId,
+	describeError,
 	type GetAlbumsResponse,
 	type GoogleAlbum,
 	getAlbum,
-	saveAlbum,
-	UPLOAD_CHANNELS,
+	linkChannel,
 } from "../../utils.js";
 
-function selectAlbum(channelId: string, album: { id: string; title: string }) {
-	saveAlbum(channelId, album);
+// /link: start uploading photos from this channel to an album, or switch the
+// album. The owner alert DM reuses this with a channel ID.
+
+export const data = new SlashCommandBuilder()
+	.setName("link")
+	.setDescription("Upload photos from this channel to a Google Photos album.")
+	.setContexts([InteractionContextType.Guild]);
+
+// What the bot needs in a channel to upload and report back.
+const NEEDED = [
+	["View Channel", PermissionFlagsBits.ViewChannel],
+	["Read Message History", PermissionFlagsBits.ReadMessageHistory],
+	["Send Messages", PermissionFlagsBits.SendMessages],
+	["Add Reactions", PermissionFlagsBits.AddReactions],
+] as const;
+
+function link(
+	channelId: string,
+	label: string,
+	album: { id: string; title: string },
+) {
+	linkChannel(channelId, label, album);
 	triggerHealthCheck();
 }
 
-export const data = new SlashCommandBuilder()
-	.setName("album")
-	.setDescription("Choose the album a channel uploads to.")
-	.setContexts([InteractionContextType.Guild, InteractionContextType.BotDM])
-	.addStringOption((option) =>
-		option
-			.setName("channel")
-			.setDescription(
-				"Which channel (default: the one you're in, or omoide from DM)",
-			)
-			.addChoices(UPLOAD_CHANNELS.map((c) => ({ name: c.label, value: c.id }))),
-	);
-
-/** Creates a Google Photos album and makes it the upload target. */
-export async function createAndSelectAlbum(
+/** Creates a Google Photos album and links the channel to it. */
+export async function createAndLinkAlbum(
 	channelId: string,
+	label: string,
 	title: string,
 ): Promise<GoogleAlbum> {
 	const createResponse = await oauth2Client.request<GoogleAlbum>({
@@ -56,32 +64,57 @@ export async function createAndSelectAlbum(
 		data: { album: { title } },
 	});
 	console.log("Album creation success:", createResponse.data);
-	selectAlbum(channelId, { id: createResponse.data.id, title });
+	link(channelId, label, { id: createResponse.data.id, title });
 	return createResponse.data;
 }
 
+const linkedText = (label: string, title: string) =>
+	`✅ **#${label}** now uploads to **${title}**. Photos posted here from now on go to that album. For older ones, use \`/upload from\`.`;
+
 export async function execute(
 	interaction: ChatInputCommandInteraction | ButtonInteraction,
+	/** Set when called from the alert DM, which isn't in the channel. */
 	forChannelId?: string,
 ) {
-	const channelId =
-		forChannelId ??
-		(interaction.isChatInputCommand()
-			? interaction.options.getString("channel")
-			: null) ??
-		commandChannelId(interaction);
-	const label = channelLabel(channelId);
+	const channelId = forChannelId ?? interaction.channelId;
+	if (!channelId) return;
 
-	const getResponse = await oauth2Client.request<GetAlbumsResponse>({
-		url: "https://photoslibrary.googleapis.com/v1/albums",
-		method: "GET",
-	});
+	let label = channelLabel(channelId);
+	if (!forChannelId) {
+		const channel = interaction.channel;
+		if (channel && "name" in channel && channel.name) label = channel.name;
 
-	console.log("Get albums response:", getResponse.data);
+		const missing = NEEDED.filter(
+			([, flag]) => !interaction.appPermissions?.has(flag),
+		).map(([name]) => name);
+		if (missing.length) {
+			await interaction.reply({
+				content: `I can't upload from **#${label}** yet. Give me these permissions here first: ${missing.join(", ")}.`,
+				flags: MessageFlags.Ephemeral,
+			});
+			return;
+		}
+	}
 
-	const albumsArray = getResponse.data.albums || [];
+	let getResponse: { data: GetAlbumsResponse };
+	try {
+		getResponse = await oauth2Client.request<GetAlbumsResponse>({
+			url: "https://photoslibrary.googleapis.com/v1/albums?pageSize=50",
+			method: "GET",
+		});
+	} catch (error) {
+		await interaction.reply({
+			content: `Couldn't load albums from Google Photos (${describeError(error)}). Check /status.`,
+			flags: MessageFlags.Ephemeral,
+		});
+		return;
+	}
 
-	const currentAlbumId = getAlbum(channelId)?.id;
+	// A select menu holds at most 25 options.
+	const albumsArray = (getResponse.data.albums || []).slice(0, 25);
+
+	const current = getAlbum(channelId);
+	const currentAlbumId = current?.id;
 
 	const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
@@ -89,7 +122,7 @@ export async function execute(
 		new ActionRowBuilder<ButtonBuilder>().addComponents(
 			new ButtonBuilder()
 				.setCustomId("create")
-				.setLabel("Create New Album")
+				.setLabel("Create new album")
 				.setStyle(ButtonStyle.Primary),
 		),
 	);
@@ -97,7 +130,7 @@ export async function execute(
 	if (albumsArray.length) {
 		const selectAlbum = new StringSelectMenuBuilder()
 			.setCustomId("select")
-			.setPlaceholder("Select an album")
+			.setPlaceholder("Or pick an existing album")
 			.addOptions(
 				albumsArray.map((album) =>
 					new StringSelectMenuOptionBuilder()
@@ -124,7 +157,9 @@ export async function execute(
 	);
 
 	const response = await interaction.reply({
-		content: `Choose the album for **#${label}**:`,
+		content: current
+			? `**#${label}** uploads to **${current.title}**. Pick a different album:`
+			: `Link **#${label}** to a Google Photos album. Every photo posted here from now on gets uploaded to it.`,
 		components: rows,
 		withResponse: true,
 		flags: MessageFlags.Ephemeral,
@@ -147,10 +182,11 @@ export async function execute(
 			const albumNameInput = new TextInputBuilder()
 				.setCustomId("albumNameInput")
 				.setStyle(TextInputStyle.Short)
-				.setPlaceholder("Your Album Name");
+				.setPlaceholder("Album name")
+				.setValue(label.slice(0, 100));
 			const albumNameLabel = new LabelBuilder()
 				.setLabel("Album Name")
-				.setDescription("Enter the name of your new album")
+				.setDescription(`New Google Photos album for #${label}`)
 				.setTextInputComponent(albumNameInput);
 			modal.addLabelComponents(albumNameLabel);
 
@@ -167,10 +203,10 @@ export async function execute(
 
 			await modalSubmission.deferUpdate();
 
-			await createAndSelectAlbum(channelId, albumName);
+			await createAndLinkAlbum(channelId, label, albumName);
 
 			await interaction.editReply({
-				content: `Album **${albumName}** created and selected for **#${label}**!`,
+				content: linkedText(label, albumName),
 				components: [],
 			});
 		} else if (confirmation.customId === "select") {
@@ -190,16 +226,16 @@ export async function execute(
 				albumsArray.find((album) => album.id === selectedAlbumId)?.title || "";
 
 			if (currentAlbumId !== selectedAlbumId) {
-				selectAlbum(channelId, { id: selectedAlbumId, title: albumTitle });
+				link(channelId, label, { id: selectedAlbumId, title: albumTitle });
 			}
 
 			await confirmation.update({
-				content: `Album **${albumTitle}** selected for **#${label}**!`,
+				content: linkedText(label, albumTitle),
 				components: [],
 			});
 		} else if (confirmation.customId === "cancel") {
 			await confirmation.update({
-				content: "Action cancelled",
+				content: "Cancelled, nothing changed.",
 				components: [],
 			});
 		}
@@ -207,7 +243,7 @@ export async function execute(
 		console.error(error);
 
 		await interaction.editReply({
-			content: "Action timed out or cancelled.",
+			content: "Timed out, nothing changed.",
 			components: [],
 		});
 	}
