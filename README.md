@@ -22,7 +22,6 @@ For a channel in another server, invite the bot first: Developer Portal, OAuth2,
 | `/link` | Upload photos from this channel to an album (or switch album) |
 | `/unlink` | Stop uploading from this channel |
 | `/upload message\|from\|range` | Upload photos from older messages in this channel, skipping ones already in the album |
-| `/clearalbum` | Remove the bot's photos from this channel's album (they stay in your library) |
 | `/status` | Google, login, every linked channel's album, and waiting uploads |
 
 ## Health check
