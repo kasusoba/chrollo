@@ -21,7 +21,7 @@ export default {
 		const ownerId = process.env.DISCORD_OWNER_ID;
 		if (ownerId && interaction.user.id !== ownerId) {
 			return interaction.reply({
-				content: "You're not allowed to control this bot.",
+				content: "Only the bot owner can use this.",
 				flags: MessageFlags.Ephemeral,
 			});
 		}

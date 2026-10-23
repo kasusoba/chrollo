@@ -30,7 +30,13 @@ for (const folder of commandFolders) {
 		// Support both ES exports AND CommonJS exports
 		const command = commandModule.default ?? commandModule;
 		if ("data" in command && "execute" in command) {
-			commands.push(command.data.toJSON());
+			// "0" hides the command in servers from everyone except admins, so
+			// members don't see commands they can't use. The owner check in
+			// interactionCreate still blocks other admins.
+			commands.push({
+				...command.data.toJSON(),
+				default_member_permissions: "0",
+			});
 		} else {
 			console.log(
 				`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`,
