@@ -13,7 +13,7 @@ docker compose down            # stop
 
 ## Channels and albums
 
-The bot uploads from the channels listed in `UPLOAD_CHANNELS` (`src/utils.ts`): omoide and a private test channel. They can be in any server the bot is in. Each channel has its own album: run `/album` in that channel (or `/album channel:<name>` from a DM) to pick or create it. `album.json` stores one album per channel.
+The bot uploads from the channels listed in `UPLOAD_CHANNELS` (`src/utils.ts`): omoide and a private test channel (#bot-test). They can be in any server the bot is in. Each channel has its own album: run `/album` in that channel (or `/album channel:<name>` from a DM) to pick or create it. `album.json` stores one album per channel.
 
 To add a channel: invite the bot to its server (OAuth2 URL with `bot` + `applications.commands`, permissions View Channels, Send Messages, Read Message History, Add Reactions), add the channel ID to `UPLOAD_CHANNELS`, redeploy, then run `/album` there.
 

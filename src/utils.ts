@@ -22,7 +22,7 @@ export interface UploadChannel {
 // they can be in any server the bot is in.
 export const UPLOAD_CHANNELS: UploadChannel[] = [
 	{ id: OPERATING_CHANNEL_ID, label: "omoide" },
-	{ id: "1450051502348439684", label: "test" },
+	{ id: "1450051502348439684", label: "bot-test" },
 ];
 
 export function isUploadChannel(channelId: string | null): boolean {
