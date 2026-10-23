@@ -130,26 +130,6 @@ export function isAuthError(error: any): boolean {
 }
 
 /**
- * Lightweight liveness check for the Google credentials. Forces a token refresh
- * if the access token is stale. Returns false only when the bot genuinely needs
- * to be re-authenticated — transient network/5xx errors are treated as healthy.
- */
-export async function isGoogleAuthHealthy(): Promise<boolean> {
-	if (!oauth2Client.credentials?.refresh_token) {
-		return false;
-	}
-	try {
-		await oauth2Client.request({
-			url: "https://photoslibrary.googleapis.com/v1/albums?pageSize=1",
-			method: "GET",
-		});
-		return true;
-	} catch (error) {
-		return !isAuthError(error);
-	}
-}
-
-/**
  * Wraps an API request with retry logic based on Google Cloud API recommendations.
  * - 5xx: Exponential backoff (starting at 1s)
  * - 429: Wait 30s minimum

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import session from "express-session";
 import { oauth2Client, TOKEN_PATH } from "./googleClient.js";
+import { triggerHealthCheck } from "./health.js";
 
 // Node races IPv4/IPv6 and drops each attempt after 250ms by default. When the
 // link to Google is slow (500ms+ connects seen on the Pi), every attempt gets
@@ -106,6 +107,7 @@ app.get("/auth/callback", async (req, res) => {
 			const newData = { ...currentData, ...tokens };
 			fs.writeFileSync(TOKEN_PATH, JSON.stringify(newData, null, 2));
 			console.log("[GOOGLE] Tokens saved to disk.");
+			triggerHealthCheck();
 
 			return res.send(
 				"Authorization successful! You can now use the bot's features.",

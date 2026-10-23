@@ -1,5 +1,6 @@
 import { Events, type Message, MessageFlags } from "discord.js";
 import { oauth2Client } from "../googleClient.js";
+import { recordUploadFailure, recordUploadSuccess } from "../health.js";
 import {
 	type Album,
 	getAuthUrl,
@@ -35,7 +36,9 @@ export default {
 			try {
 				album = await getValidatedAlbum();
 			} catch (error) {
-				message.reply(error instanceof Error ? error.message : "Album error");
+				const text = error instanceof Error ? error.message : "Album error";
+				recordUploadFailure(text);
+				message.reply(text);
 				return;
 			}
 			const albumId = album.id;
@@ -53,6 +56,7 @@ export default {
 					messageId: message.id,
 				},
 			);
+			recordUploadSuccess(uploadResponse.numOfUploaded);
 			// Routine confirmation fires on every photo, so keep it quiet (like a
 			// leaderboard bot): no push notification and no reply ping.
 			message.reply({
@@ -62,7 +66,9 @@ export default {
 			});
 		} catch (error) {
 			console.error("Error uploading photos:", error);
-			message.reply(error instanceof Error ? error.message : "Unknown error");
+			const text = error instanceof Error ? error.message : "Unknown error";
+			recordUploadFailure(text);
+			message.reply(text);
 		}
 	},
 };

@@ -11,6 +11,18 @@ docker compose logs -f         # logs
 docker compose down            # stop
 ```
 
+## Health check
+
+The bot checks Google, auth and the selected album at boot and every 10 minutes (`HEALTH_CHECK_INTERVAL_MINUTES`). When something breaks or recovers, it DMs `DISCORD_OWNER_ID`. A failure is rechecked after a minute before the DM goes out, so short blips stay quiet.
+
+Run `/status` any time to see the current state and the last upload.
+
+After adding or changing slash commands, register them once:
+
+```sh
+docker compose run --rm chrollo node dist/deployCommand.js
+```
+
 ## Deploy on a Raspberry Pi
 
 Works on a 64-bit Pi OS (arm64). Docker builds the image on the Pi, so you do not need Node or pnpm there.

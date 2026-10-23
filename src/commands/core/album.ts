@@ -15,6 +15,7 @@ import {
 	TextInputStyle,
 } from "discord.js";
 import { oauth2Client } from "../../googleClient.js";
+import { triggerHealthCheck } from "../../health.js";
 import {
 	ALBUM_PATH,
 	type GetAlbumsResponse,
@@ -33,6 +34,7 @@ function saveAlbumFile(albumObject: { id: string; title: string }) {
 		fs.writeFileSync(ALBUM_PATH, JSON.stringify(albumObject, null, 2));
 		console.log("[INTERACTION: Album] Album saved to disk.");
 	}
+	triggerHealthCheck();
 }
 
 export const data = new SlashCommandBuilder()
