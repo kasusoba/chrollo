@@ -9,6 +9,9 @@ export const oauth2Client = new google.auth.OAuth2(
 	process.env.GOOGLE_CLIENT_SECRET,
 	process.env.GOOGLE_REDIRECT_URI,
 );
+// Every caller shares one in-flight token refresh. Without a timeout, a stalled
+// refresh (seen after a DNS outage) hangs every Google call forever.
+oauth2Client.transporter.defaults.timeout = 60_000;
 
 if (fs.existsSync(TOKEN_PATH)) {
 	try {

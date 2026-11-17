@@ -425,7 +425,10 @@ export async function uploadBytesToGooglePhotos(
 
 	let arrayBuffer: ArrayBuffer;
 	try {
-		const response = await fetch(attachment.url);
+		// A stalled download would otherwise hang the upload (and queue retries) forever.
+		const response = await fetch(attachment.url, {
+			signal: AbortSignal.timeout(5 * 60_000),
+		});
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}`);
 		}
@@ -497,6 +500,8 @@ export async function uploadBytesToGooglePhotos(
 				oauth2Client.request<string>({
 					url: "https://photoslibrary.googleapis.com/v1/uploads",
 					method: "POST",
+					// Big videos on the Pi's link need longer than the 60s default.
+					timeout: 10 * 60_000,
 					headers: {
 						"Content-type": "application/octet-stream",
 						"X-Goog-Upload-Protocol": "raw",
